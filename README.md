@@ -79,3 +79,15 @@ Commands: `cmd/setpoint`, `cmd/boost_temp`, `cmd/mode`, `cmd/preset` (`boost`/`n
 
 Access point default: **ElementIQ-Setup** (open, no password)  
 mDNS: **ElementIQ.local**
+
+## Recent fixes (2026-11-16)
+
+- **Serial on ESP32-C3**: Removed the `Serial0` redefine so that native USB CDC works with the DevKitM-1. Open the USB CDC port (not a secondary UART) at 115200.
+- **WiFi scan on captive portal**: Scan is delayed slightly after softAP starts, results are logged, the portal page polls every 2.5 s, and an empty list triggers a new scan request. Networks should appear within a few seconds of joining the AP.
+- Boot order remains: WiFi/AP first, then `server.begin()`.
+- LittleFS is mounted with format-on-fail (`LittleFS.begin(true)`).
+
+### Scan reliability (follow-up)
+- Replaced unreliable async scan with a short **blocking** scan for the captive portal.
+- Call `WiFi.disconnect(false)` when STA is not connected before scanning (fixes common AP+STA -2 failure).
+- Portal still polls every 2.5 s; scan interval reduced to 8 s.

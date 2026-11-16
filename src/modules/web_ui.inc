@@ -4,97 +4,156 @@ const char SHARED_HEAD[] PROGMEM = R"rawliteral(
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>ElementIQ</title>
 <style>
-:root{--bg:#05080f;--card:#0a1628;--primary:#1e6bb8;--primary-bright:#3b9eff;--accent:#ff8c00;--accent-hot:#ff5a00;--text:#e8f0fa;--muted:#6b8aad;--track:#123050;--drawer:#0c1a2e}
-body.theme-dark{--bg:#0a0a0a;--card:#161616;--primary:#3b82f6;--primary-bright:#60a5fa;--track:#2a2a2a;--drawer:#111;--muted:#888;--text:#f0f0f0}
-body.theme-light{--bg:#e8eef5;--card:#fff;--primary:#1e6bb8;--primary-bright:#0284c7;--text:#0f172a;--muted:#64748b;--track:#cbd5e1;--drawer:#f1f5f9;--accent:#ea580c;--accent-hot:#dc2626}
+:root{
+  --bg:#0b1220;--sidebar:#0e1626;--card:#121c2e;--card-border:#1c2a42;
+  --primary:#3b9eff;--primary-dim:#1e6bb8;--accent:#ff8c00;--accent-hot:#ff5a00;
+  --text:#e8f0fa;--muted:#7a92b0;--track:#1a2a40;--row:#0f1828;--hover:#18253a;
+}
+body.theme-dark{--bg:#0a0a0a;--sidebar:#111;--card:#161616;--card-border:#222;--primary:#60a5fa;--primary-dim:#3b82f6;--track:#2a2a2a;--row:#121212;--hover:#1a1a1a;--muted:#888;--text:#f0f0f0}
+body.theme-light{--bg:#e8eef5;--sidebar:#f1f5f9;--card:#fff;--card-border:#dbe3ee;--primary:#0284c7;--primary-dim:#1e6bb8;--text:#0f172a;--muted:#64748b;--track:#cbd5e1;--row:#f8fafc;--hover:#e2e8f0;--accent:#ea580c;--accent-hot:#dc2626}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:16px 12px 40px}
-.topbar{display:flex;align-items:center;justify-content:space-between;max-width:440px;margin:0 auto 16px}
-.brand{display:flex;align-items:center;gap:10px}
-.brand img{width:48px;height:48px;border-radius:10px;object-fit:contain}
-.brand span{font-weight:700;color:var(--primary-bright)}
-.hamburger{width:42px;height:42px;border:none;border-radius:10px;background:var(--card);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px}
-.hamburger span{display:block;width:20px;height:2px;background:var(--text)}
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;opacity:0;pointer-events:none;transition:.25s}
+html,body{height:100%}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh}
+/* ---- Sidebar (Shelly-style) ---- */
+.sidebar{width:220px;min-width:220px;background:var(--sidebar);border-right:1px solid var(--card-border);display:flex;flex-direction:column;padding:16px 12px;position:fixed;top:0;left:0;bottom:0;z-index:30;transition:transform .25s}
+.brand{display:flex;align-items:center;gap:10px;padding:8px 10px 18px;border-bottom:1px solid var(--card-border);margin-bottom:12px}
+.brand img{width:40px;height:40px;object-fit:contain;flex-shrink:0}
+.brand .brand-text{display:flex;flex-direction:column;line-height:1.15}
+.brand .brand-text strong{font-size:1.05rem;font-weight:700;background:linear-gradient(90deg,#3b9eff,#ff8c00);-webkit-background-clip:text;background-clip:text;color:transparent}
+.brand .brand-text small{font-size:.68rem;color:var(--muted);font-weight:500}
+.sidebar nav{display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto}
+.sidebar nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:600;transition:background .15s,color .15s}
+.sidebar nav a:hover{background:var(--hover);color:var(--text)}
+.sidebar nav a.active{background:rgba(59,158,255,.15);color:var(--primary)}
+.sidebar nav a .ico{width:18px;text-align:center;opacity:.85}
+.sidebar .side-foot{padding:12px 10px 4px;border-top:1px solid var(--card-border);font-size:.72rem;color:var(--muted)}
+/* ---- Main ---- */
+.main{flex:1;margin-left:220px;min-width:0;display:flex;flex-direction:column;min-height:100vh}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--card-border);background:var(--sidebar);position:sticky;top:0;z-index:20}
+.topbar .page-title{font-size:1rem;font-weight:600;color:var(--text)}
+.topbar .status-icons{display:flex;align-items:center;gap:12px;font-size:.8rem;color:var(--muted)}
+.topbar .status-icons .dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block}
+.hamburger{display:none;width:40px;height:40px;border:none;border-radius:10px;background:var(--card);cursor:pointer;flex-direction:column;align-items:center;justify-content:center;gap:5px}
+.hamburger span{display:block;width:18px;height:2px;background:var(--text)}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:25;opacity:0;pointer-events:none;transition:.25s}
 .overlay.open{opacity:1;pointer-events:auto}
-.drawer{position:fixed;top:0;right:0;width:min(300px,88vw);height:100%;background:var(--drawer);z-index:50;transform:translateX(100%);transition:.28s;overflow-y:auto;padding:20px 18px 40px}
-.drawer.open{transform:translateX(0)}
-.drawer h2{font-size:1rem;margin-bottom:16px;color:var(--primary-bright)}
-.drawer nav a{display:block;padding:12px 14px;border-radius:10px;color:var(--text);text-decoration:none;margin-bottom:4px;font-weight:600}
-.drawer nav a:hover,.drawer nav a.active{background:var(--primary);color:#fff}
-.drawer nav .sub{padding-left:28px;font-size:.88rem;font-weight:500;color:var(--muted)}
-.card{background:var(--card);border-radius:20px;padding:20px;max-width:440px;margin:0 auto;box-shadow:0 12px 40px rgba(0,0,0,.35)}
-.card h1{font-size:1.1rem;margin-bottom:14px;color:var(--primary-bright)}
+.content{padding:20px 22px 40px;max-width:720px;width:100%}
+.card{background:var(--card);border:1px solid var(--card-border);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+.card h1,.card h2{font-size:1rem;font-weight:600;margin-bottom:14px;color:var(--text)}
+.kv{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--card-border);font-size:.92rem}
+.kv:last-child{border-bottom:none}
+.kv .k{color:var(--muted)}
+.kv .v{color:var(--text);font-weight:600}
 label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:12px 0 6px}
 label.row{display:flex;align-items:center;justify-content:space-between;text-transform:none;font-size:.9rem;letter-spacing:0;color:var(--text)}
-input,select{width:100%;padding:10px;border-radius:8px;border:1px solid var(--track);background:var(--bg);color:var(--text);font-size:.95rem}
-button.save,button.primary{width:100%;padding:12px;border:none;border-radius:10px;background:var(--primary);color:#fff;font-weight:600;cursor:pointer;margin-top:12px}
+input,select{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--card-border);background:var(--row);color:var(--text);font-size:.95rem}
+button.save,button.primary{width:100%;padding:12px;border:none;border-radius:10px;background:var(--primary-dim);color:#fff;font-weight:600;cursor:pointer;margin-top:12px}
+button.save:hover,button.primary:hover{background:var(--primary)}
 button.danger{background:#b91c1c}
 .hint{font-size:.75rem;color:var(--muted);margin-top:6px}
-.footer{max-width:440px;margin:18px auto 0;text-align:center;font-size:.75rem;color:var(--muted)}
-.footer #clock{font-size:1.1rem;font-weight:600;color:var(--primary-bright);margin-bottom:4px}
+.footer{padding:8px 22px 20px;font-size:.72rem;color:var(--muted)}
+.footer #clock{font-size:.95rem;font-weight:600;color:var(--primary);margin-bottom:2px}
 .badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:.7rem;font-weight:700;background:#b91c1c;color:#fff;margin-left:6px}
-.dial-wrap{position:relative;width:260px;height:260px;margin:0 auto 12px;user-select:none;touch-action:none}
+.dial-wrap{position:relative;width:240px;height:240px;margin:0 auto 12px;user-select:none;touch-action:none}
 .dial-svg{width:100%;height:100%}
-.dial-track{fill:none;stroke:var(--track);stroke-width:18}
-.dial-progress{fill:none;stroke:var(--primary);stroke-width:18;stroke-linecap:round}
+.dial-track{fill:none;stroke:var(--track);stroke-width:16}
+.dial-progress{fill:none;stroke:var(--primary);stroke-width:16;stroke-linecap:round}
 .dial-progress.heating{stroke:var(--accent)}.dial-progress.boost{stroke:var(--accent-hot)}
-.dial-center{position:absolute;inset:48px;border-radius:50%;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center}
-.dial-temp{font-size:2.8rem;font-weight:700;line-height:1}
+.dial-center{position:absolute;inset:44px;border-radius:50%;background:var(--row);display:flex;flex-direction:column;align-items:center;justify-content:center}
+.dial-temp{font-size:2.6rem;font-weight:700;line-height:1}
 .dial-unit{font-size:.85rem;color:var(--muted)}
-.dial-target{font-size:.8rem;color:var(--primary-bright);margin-top:8px;font-weight:600}
+.dial-target{font-size:.8rem;color:var(--primary);margin-top:8px;font-weight:600}
 .dial-action{font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin-top:4px;color:var(--muted)}
 .dial-action.heating{color:var(--accent)}.dial-action.boost{color:var(--accent-hot)}
 .modes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
 .presets{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.mode-btn,.preset-btn{background:var(--bg);border:1px solid transparent;color:var(--muted);border-radius:12px;padding:10px 4px;font-size:.72rem;font-weight:700;text-transform:uppercase;cursor:pointer}
-.mode-btn.active{background:var(--primary);color:#fff}
+.mode-btn,.preset-btn{background:var(--row);border:1px solid var(--card-border);color:var(--muted);border-radius:10px;padding:10px 4px;font-size:.72rem;font-weight:700;text-transform:uppercase;cursor:pointer}
+.mode-btn.active{background:var(--primary-dim);color:#fff;border-color:transparent}
 .mode-btn.active[data-mode=off]{background:#475569}
 .mode-btn.active[data-mode=boost]{background:var(--accent-hot);color:#fff}
-.preset-btn.active{background:var(--primary);color:#fff}
-canvas.chart{width:100%;height:160px;background:var(--bg);border-radius:12px;margin-top:8px}
+.preset-btn.active{background:var(--primary-dim);color:#fff;border-color:transparent}
+canvas.chart{width:100%;height:160px;background:var(--row);border-radius:10px;margin-top:8px}
 .stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:12px;text-align:center}
-.stats div{background:var(--bg);border-radius:10px;padding:10px 4px}
-.stats .n{font-size:1.1rem;font-weight:700;color:var(--primary-bright)}
+.stats div{background:var(--row);border-radius:10px;padding:10px 4px;border:1px solid var(--card-border)}
+.stats .n{font-size:1.1rem;font-weight:700;color:var(--primary)}
 .stats .l{font-size:.65rem;color:var(--muted);text-transform:uppercase}
+/* Mobile: sidebar becomes drawer */
+@media(max-width:800px){
+  .sidebar{transform:translateX(-100%)}
+  .sidebar.open{transform:translateX(0)}
+  .main{margin-left:0}
+  .hamburger{display:flex}
+  .content{padding:16px 14px 32px}
+}
 </style></head><body>
 )rawliteral";
 
 const char NAV_SCRIPT[] PROGMEM = R"rawliteral(
 <script>
-function toggleMenu(){document.getElementById('drawer').classList.toggle('open');document.getElementById('overlay').classList.toggle('open')}
-function applyTheme(id){document.body.classList.remove('theme-dark','theme-light');if(id==1)document.body.classList.add('theme-dark');if(id==2)document.body.classList.add('theme-light')}
-async function saveSettings(data){try{const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-const d=await r.json();if(!r.ok)throw new Error(d.error||'Settings could not be saved');return true}
-catch(e){alert('Save failed: '+e.message);return false}}
-async function loadTheme(){try{const r=await fetch('/api/status');const d=await r.json();applyTheme(Number(d.theme||0));const c=document.getElementById('clock');if(c)c.textContent=d.time||'--:--'}catch(e){}}
+function toggleMenu(){
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('overlay').classList.toggle('open');
+}
+function applyTheme(id){
+  document.body.classList.remove('theme-dark','theme-light');
+  if(id==1)document.body.classList.add('theme-dark');
+  if(id==2)document.body.classList.add('theme-light');
+}
+async function saveSettings(data){
+  try{
+    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'Settings could not be saved');
+    return true;
+  }catch(e){alert('Save failed: '+e.message);return false}
+}
+async function loadTheme(){
+  try{
+    const r=await fetch('/api/status');const d=await r.json();
+    applyTheme(Number(d.theme||0));
+    const c=document.getElementById('clock');if(c)c.textContent=d.time||'--:--';
+    const t=document.getElementById('top-title');
+    if(t&&d.friendly_name)t.textContent=d.friendly_name;
+    const ip=document.getElementById('top-ip');
+    if(ip)ip.textContent=(d.ip&&d.ip!=='0.0.0.0')?d.ip:'AP mode';
+  }catch(e){}
+}
 loadTheme();
 </script>
 )rawliteral";
 
 String navHtml(const char* active) {
-  // Use custom raw-string delimiter — plain R"( breaks on onclick="...()"
-  String s = R"nav(
-  <div class="topbar"><div class="brand"><img src="/logo.png" alt="" onerror="this.style.display='none'"><span>ElementIQ</span></div>
-  <button class="hamburger" onclick="toggleMenu()"><span></span><span></span><span></span></button></div>
-  <div class="overlay" id="overlay" onclick="toggleMenu()"></div>
-  <aside class="drawer" id="drawer"><h2>Menu</h2><nav>
-  <a href="/" class=")nav";
-  if (!strcmp(active,"home")) s += "active";
-  s += R"nav(">Home</a><a href="/connections" class=")nav";
-  if (!strcmp(active,"connections")) s += "active";
-  s += R"nav(">Connections</a><a href="/connections#ap" class="sub">AP</a><a href="/connections#mqtt" class="sub">MQTT</a>
-  <a href="/time" class=")nav";
-  if (!strcmp(active,"time")) s += "active";
-  s += R"nav(">Time</a><a href="/temperature" class=")nav";
-  if (!strcmp(active,"temperature")) s += "active";
-  s += R"nav(">Temperature</a><a href="/schedule" class=")nav";
-  if (!strcmp(active,"schedule")) s += "active";
-  s += R"nav(">Schedule</a><a href="/stats" class=")nav";
-  if (!strcmp(active,"stats")) s += "active";
-  s += R"nav(">Stats / Graph</a><a href="/update" class=")nav";
-  if (!strcmp(active,"update")) s += "active";
-  s += R"nav(">Update</a></nav></aside>
+  auto cls = [&](const char* id) -> const char* {
+    return strcmp(active, id) == 0 ? "active" : "";
+  };
+  String s;
+  s += R"nav(
+<div class="overlay" id="overlay" onclick="toggleMenu()"></div>
+<aside class="sidebar" id="sidebar">
+  <div class="brand">
+    <img src="/logo.png" alt="ElementIQ" onerror="this.style.display='none'">
+    <div class="brand-text"><strong>ElementIQ</strong><small>Heat control</small></div>
+  </div>
+  <nav>
+)nav";
+  s += String("<a href=\"/\" class=\"") + cls("home") + "\"><span class=\"ico\">⌂</span>Home</a>";
+  s += String("<a href=\"/connections\" class=\"") + cls("connections") + "\"><span class=\"ico\">⚙</span>Connections</a>";
+  s += String("<a href=\"/time\" class=\"") + cls("time") + "\"><span class=\"ico\">⏱</span>Time</a>";
+  s += String("<a href=\"/temperature\" class=\"") + cls("temperature") + "\"><span class=\"ico\">🌡</span>Temperature</a>";
+  s += String("<a href=\"/schedule\" class=\"") + cls("schedule") + "\"><span class=\"ico\">📅</span>Schedule</a>";
+  s += String("<a href=\"/stats\" class=\"") + cls("stats") + "\"><span class=\"ico\">📊</span>Stats</a>";
+  s += String("<a href=\"/update\" class=\"") + cls("update") + "\"><span class=\"ico\">⟳</span>Update</a>";
+  s += R"nav(
+  </nav>
+  <div class="side-foot">ElementIQ · v1.0.1</div>
+</aside>
+<div class="main">
+  <div class="topbar">
+    <button class="hamburger" onclick="toggleMenu()" aria-label="Menu"><span></span><span></span><span></span></button>
+    <div class="page-title" id="top-title">ElementIQ</div>
+    <div class="status-icons"><span class="dot"></span><span id="top-ip">…</span><span id="clock">--:--</span></div>
+  </div>
+  <div class="content">
 )nav";
   return s;
 }
@@ -158,7 +217,10 @@ async function update(){try{
   applyTheme(Number(d.theme||0));
 }catch(e){}}
 setInterval(update,2000);update();
-</script></body></html>
+</script>
+</div><!--content-->
+</div><!--main-->
+</body></html>
 )rawliteral";
 
 const char CONNECTIONS_BODY[] PROGMEM = R"rawliteral(
@@ -204,7 +266,10 @@ if(apPass||document.getElementById('ap_open').checked)data.ap_pass=apPass;
 if(!await saveSettings(data))return;
 document.getElementById('mqtt_pass').value='';document.getElementById('ap_pass').value='';alert('Saved');load()}
 load();
-</script></body></html>
+</script>
+</div><!--content-->
+</div><!--main-->
+</body></html>
 )rawliteral";
 
 const char TIME_BODY[] PROGMEM = R"rawliteral(
@@ -219,7 +284,10 @@ document.getElementById('tz').value=d.tz!=null?d.tz:2;document.getElementById('c
 document.getElementById('clock2').textContent=d.time||'--:--';applyTheme(Number(d.theme||0))}
 async function save(){if(!await saveSettings({tz:parseInt(document.getElementById('tz').value)||2}))return;alert('Saved');load()}
 load();setInterval(load,30000);
-</script></body></html>
+</script>
+</div><!--content-->
+</div><!--main-->
+</body></html>
 )rawliteral";
 
 const char TEMP_BODY[] PROGMEM = R"rawliteral(
@@ -253,7 +321,10 @@ eco_temp:+document.getElementById('eco_temp').value,
 min_on_ms:+document.getElementById('min_on').value*1000,min_off_ms:+document.getElementById('min_off').value*1000}))return;
 alert('Saved');load()}
 load();
-</script></body></html>
+</script>
+</div><!--content-->
+</div><!--main-->
+</body></html>
 )rawliteral";
 
 const char SCHEDULE_BODY[] PROGMEM = R"rawliteral(
@@ -281,7 +352,10 @@ sched_on_h:+document.getElementById('on_h').value,sched_on_m:+document.getElemen
 sched_off_h:+document.getElementById('off_h').value,sched_off_m:+document.getElementById('off_m').value}))return;
 alert('Saved');load()}
 load();setInterval(load,15000);
-</script></body></html>
+</script>
+</div><!--content-->
+</div><!--main-->
+</body></html>
 )rawliteral";
 
 const char STATS_BODY[] PROGMEM = R"rawliteral(
@@ -319,7 +393,10 @@ async function load(){
   drawChart((h.temps||[]).map(Number));
 }
 load();setInterval(load,10000);
-</script></body></html>
+</script>
+</div><!--content-->
+</div><!--main-->
+</body></html>
 )rawliteral";
 
 const char UPDATE_BODY[] PROGMEM = R"rawliteral(
@@ -359,7 +436,10 @@ if(!r.ok){const d=await r.json();document.getElementById('ota_msg').textContent=
 async function factory(){if(!confirm('FACTORY RESET all settings and WiFi?'))return;
 await fetch('/api/factoryreset',{method:'POST'})}
 load();
-</script></body></html>
+</script>
+</div><!--content-->
+</div><!--main-->
+</body></html>
 )rawliteral";
 
 void sendPage(AsyncWebServerRequest *req, const char* active, const char* body) {
@@ -369,6 +449,8 @@ void sendPage(AsyncWebServerRequest *req, const char* active, const char* body) 
   response->print(FPSTR(NAV_SCRIPT));
   response->print(navigation);
   response->print(FPSTR(body));
+  // Close .content and .main opened by navHtml (page bodies end with </body></html>)
+  // Bodies already contain their own scripts and closing tags.
   req->send(response);
 }
 

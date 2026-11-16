@@ -26,11 +26,8 @@
 #include <new>
 #include "config.h"
 
-// ESP32-C3: core may not expose USB Serial in this TU — use UART0.
-#include <HardwareSerial.h>
-#ifndef Serial
-#define Serial Serial0
-#endif
+// Use native USB CDC on ESP32-C3-DevKitM-1 (ARDUINO_USB_CDC_ON_BOOT=1).
+// Do NOT redefine Serial to Serial0 — that silences the USB monitor.
 
 #include "modules/controller.inc"
 #include "modules/mqtt_ota.inc"
@@ -39,7 +36,10 @@
 #include "modules/portal.inc"
 
 void setup() {
-  Serial.begin(115200); delay(200);
+  Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT
+  delay(800);   // allow USB CDC to enumerate before first prints
+#endif
   Serial.printf("\n=== ElementIQ Controller %s ===\n", FIRMWARE_VERSION);
   pinMode(RELAY_PIN, OUTPUT); digitalWrite(RELAY_PIN, LOW);
   pinMode(LED_PIN, OUTPUT); digitalWrite(LED_PIN, HIGH);
@@ -50,7 +50,7 @@ void setup() {
   }
   checkFactoryResetPin();
 
-  if (!LittleFS.begin()) Serial.println("[FS] fail");
+  if (!LittleFS.begin(true)) Serial.println("[FS] mount/format failed");
   Wire.begin(I2C_SDA, I2C_SCL);
   adsReady = initializeAds();
   if (adsReady) {
@@ -74,8 +74,8 @@ void setup() {
   setupAPI();
   setupWebUI();
   setupPortalRoutes();
-  server.begin();
   setupWiFi();
+  server.begin();
 }
 
 void loop() {

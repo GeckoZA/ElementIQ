@@ -39,7 +39,10 @@ inline HeaterDecision evaluateThermostat(Mode mode, bool heaterOn,
   if (mode == Mode::off || !sampleValid || sensorFault ||
       (mode == Mode::automatic && !scheduleAllowsHeat))
     return {false, true};
-  if (temperature < target - hysteresis) return {true, false};
+
+  // Use an inclusive lower threshold so a sample exactly at the hysteresis
+  // boundary still trips the heater on when the system is off.
+  if (temperature <= target - hysteresis) return {true, false};
   if (temperature >= target) return {false, false};
   return {heaterOn, false};
 }

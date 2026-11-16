@@ -7,47 +7,22 @@ void copyStr(char *dst, size_t n, JsonVariantConst v) {
 }
 
 constexpr size_t MAX_SETTINGS_BODY = 2048;
-struct SettingsBody {
-  String value;
-  size_t expectedLength = 0;
-};
-SettingsBody rejectedSettingsBody;
 
-void bodyAccum(AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
-  if (index == 0) {
-    if (req->_tempObject && req->_tempObject != &rejectedSettingsBody)
-      delete static_cast<SettingsBody*>(req->_tempObject);
-    req->_tempObject = nullptr;
-    if (total > MAX_SETTINGS_BODY) {
-      req->_tempObject = &rejectedSettingsBody;
-      req->send(413, "application/json", "{\"error\":\"body too large\"}");
-      return;
-    }
-    SettingsBody *body = new (std::nothrow) SettingsBody;
-    if (!body) {
-      req->_tempObject = &rejectedSettingsBody;
-      req->send(503, "application/json", "{\"error\":\"insufficient memory\"}");
-      return;
-    }
-    body->expectedLength = total;
-    if (!body->value.reserve(total + 1)) {
-      delete body;
-      req->_tempObject = &rejectedSettingsBody;
-      req->send(503, "application/json", "{\"error\":\"insufficient memory\"}");
-      return;
-    }
-    req->_tempObject = body;
+static bool readRequestJsonBody(AsyncWebServerRequest* req, JsonDocument& doc) {
+  String body = req->arg("plain");
+  if (body.length() == 0) {
+    return false;
   }
-  if (!req->_tempObject || req->_tempObject == &rejectedSettingsBody) return;
-  SettingsBody *body = static_cast<SettingsBody*>(req->_tempObject);
-  if (total != body->expectedLength || index != body->value.length() ||
-      index > body->expectedLength ||
-      len > body->expectedLength - index ||
-      !body->value.concat(reinterpret_cast<const char*>(data), len)) {
-    delete body;
-    req->_tempObject = &rejectedSettingsBody;
-    req->send(400, "application/json", "{\"error\":\"invalid body\"}");
+  if (body.length() > MAX_SETTINGS_BODY) {
+    req->send(413, "application/json", "{\"error\":\"body too large\"}");
+    return false;
   }
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    req->send(400, "application/json", "{\"error\":\"invalid json\"}");
+    return false;
+  }
+  return true;
 }
 
 bool applySettingsJson(JsonDocument& doc) {
@@ -260,19 +235,10 @@ void setupAPI() {
 
   server.on("/api/settings", HTTP_POST,
     [](AsyncWebServerRequest *req) {
-      if (req->_tempObject == &rejectedSettingsBody) {
-        req->_tempObject = nullptr;
+      JsonDocument doc;
+      if (!readRequestJsonBody(req, doc)) {
         return;
       }
-      SettingsBody *body = static_cast<SettingsBody*>(req->_tempObject);
-      if (!body) { req->send(400, "application/json", "{\"error\":\"no body\"}"); return; }
-      JsonDocument doc;
-      if (body->value.length() != body->expectedLength ||
-          deserializeJson(doc, body->value)) {
-        delete body; req->_tempObject = nullptr;
-        req->send(400, "application/json", "{\"error\":\"bad json\"}"); return;
-      }
-      delete body; req->_tempObject = nullptr;
       StateGuard guard;
       if (!doc["ap_pass"].isNull()) {
         const char* password = doc["ap_pass"].as<const char*>();
@@ -288,7 +254,7 @@ void setupAPI() {
       }
       pendingStatePublish = true;
       req->send(200, "application/json", "{\"ok\":true}");
-    }, NULL, bodyAccum);
+    });
 
   server.on("/api/ota/check", HTTP_GET, [](AsyncWebServerRequest *req) {
     if (!queueOtaOperation(false)) {

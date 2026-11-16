@@ -24,6 +24,11 @@ void test_thermostat_hysteresis_transitions() {
   TEST_ASSERT_TRUE(below.requestedOn);
   TEST_ASSERT_FALSE(below.forceOff);
 
+  HeaterDecision atThreshold = elementiq::evaluateThermostat(
+      Mode::automatic, false, true, false, 50.0f, 55.0f, 5.0f, true);
+  TEST_ASSERT_TRUE(atThreshold.requestedOn);
+  TEST_ASSERT_FALSE(atThreshold.forceOff);
+
   HeaterDecision withinBand = elementiq::evaluateThermostat(
       Mode::automatic, true, true, false, 52.0f, 55.0f, 5.0f, true);
   TEST_ASSERT_TRUE(withinBand.requestedOn);
