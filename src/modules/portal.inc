@@ -131,24 +131,53 @@ button{width:100%;margin-top:20px;padding:14px;border:none;border-radius:12px;ba
 <p class="hint">If this page did not open automatically, go to <b>http://192.168.4.1</b></p>
 <button id="btn" onclick="save()">Connect</button><p class="hint" id="hint"></p></div>
 <script>
+let selectedSsid='';
+let userPickedNetwork=false;
 async function load(){
   try{
     const arr=await(await fetch('/scan')).json();
     const s=document.getElementById('ssid');
+    if(!s) return; // page replaced during connect
+    // Keep whatever the user already chose
+    const prev = userPickedNetwork ? selectedSsid : (s.value || selectedSsid);
     s.innerHTML='';
     if(!arr.length){
       s.innerHTML='<option value="">Scanning…</option>';
     }else{
+      let found=false;
       arr.forEach(n=>{
         const o=document.createElement('option');
         o.value=n.ssid;
         o.textContent=n.ssid+' ('+n.rssi+' dBm)';
+        if(prev && n.ssid===prev){ o.selected=true; found=true; }
         s.appendChild(o);
       });
+      // If previous SSID dropped off the scan, keep it as an option so selection is not lost
+      if(prev && !found){
+        const o=document.createElement('option');
+        o.value=prev; o.textContent=prev+' (selected)'; o.selected=true;
+        s.insertBefore(o, s.firstChild);
+      }
     }
-    document.getElementById('hint').textContent=arr.length+' networks';
+    if(s.value) selectedSsid=s.value;
+    const h=document.getElementById('hint');
+    if(h) h.textContent=arr.length+' networks';
   }catch(e){}
 }
+document.addEventListener('change',function(e){
+  if(e.target && e.target.id==='ssid'){
+    selectedSsid=e.target.value;
+    userPickedNetwork=true;
+  }
+});
+// Stop list refreshes from stealing focus while typing password
+document.addEventListener('focusin',function(e){
+  if(e.target && (e.target.id==='pass'||e.target.id==='ap_pass')){
+    userPickedNetwork=true;
+    const s=document.getElementById('ssid');
+    if(s&&s.value) selectedSsid=s.value;
+  }
+});
 async function save(){
   const ssid=document.getElementById('ssid').value,pass=document.getElementById('pass').value;
   const ap_pass=document.getElementById('ap_pass').value;
@@ -158,7 +187,44 @@ async function save(){
   const r=await fetch('/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
   body:new URLSearchParams({ssid,pass,ap_pass})});
   if(!r.ok){document.getElementById('hint').textContent=await r.text();document.getElementById('btn').disabled=false;return}
-  document.body.innerHTML='<div class="card"><h1>Connecting...</h1></div>';
+  document.body.innerHTML='<div class="card"><h1>Connecting…</h1><p class="hint" id="hint">Joining <b>'+ssid+'</b>. Keep this page open.</p><p class="hint" id="detail"></p></div>';
+  pollConnect(ssid, Date.now());
+}
+async function pollConnect(ssid, started){
+  const detail=document.getElementById('detail');
+  try{
+    const d=await(await fetch('/portal-status')).json();
+    const ip=d.ip||'';
+    const connected=ip && ip!=='0.0.0.0' && !String(ip).startsWith('192.168.4.');
+    if(connected){
+      const mdns=(d.mdns||'ElementIQ.local');
+      document.body.innerHTML='<div class="card">'+
+        '<h1 style="color:#22c55e">Connected</h1>'+
+        '<p class="hint">Joined <b>'+ssid+'</b></p>'+
+        '<div style="background:#0e243f;border-radius:12px;padding:14px;margin:16px 0;font-size:.95rem;line-height:1.7">'+
+        '<div><span style="color:#6b8aad">IP address</span><br><b style="font-size:1.15rem">'+ip+'</b></div>'+
+        '<div style="margin-top:12px"><span style="color:#6b8aad">mDNS name</span><br><b style="font-size:1.15rem">'+mdns+'</b></div>'+
+        '</div>'+
+        '<p class="hint">Open the device on your Wi‑Fi:</p>'+
+        '<p class="hint"><a href="http://'+ip+'/" style="color:#3b9eff">http://'+ip+'/</a></p>'+
+        '<p class="hint"><a href="http://'+mdns+'/" style="color:#3b9eff">http://'+mdns+'/</a></p>'+
+        '<p class="hint" style="margin-top:14px">You can leave this setup AP and use your home network.</p>'+
+        '</div>';
+      return;
+    }
+    if(d.wifi_connecting){
+      if(detail) detail.textContent='Status: associating… ('+Math.round((Date.now()-started)/1000)+'s)';
+    } else if(Date.now()-started > 35000){
+      document.body.innerHTML='<div class="card"><h1>Not connected</h1><p class="hint">Could not join <b>'+ssid+'</b>. Check the password and try again.</p>'+
+        '<button id="btn" onclick="location.reload()">Back</button></div>';
+      return;
+    } else if(detail){
+      detail.textContent='Still trying… ('+Math.round((Date.now()-started)/1000)+'s)';
+    }
+  }catch(e){
+    if(detail) detail.textContent='Waiting for device…';
+  }
+  setTimeout(function(){ pollConnect(ssid, started); }, 1000);
 }
 load();
 setInterval(load,2500);   // poll every 2.5 s while on the portal
@@ -166,6 +232,21 @@ setInterval(load,2500);   // poll every 2.5 s while on the portal
 )portal";
 
 void setupPortalRoutes() {
+  // Lightweight status for the captive-portal connect screen
+  server.on("/portal-status", HTTP_GET, [](AsyncWebServerRequest *req) {
+    JsonDocument doc;
+    doc["wifi_connecting"] = stationConnecting;
+    doc["wifi_status"] = (int)WiFi.status();
+    doc["ip"] = WiFi.localIP().toString();
+    doc["ap_ip"] = WiFi.softAPIP().toString();
+    doc["ssid"] = candidateSsid;
+    doc["mdns"] = "ElementIQ.local";
+    doc["rssi"] = WiFi.RSSI();
+    String json;
+    serializeJson(doc, json);
+    req->send(200, "application/json", json);
+  });
+
   server.on("/scan", HTTP_GET, [](AsyncWebServerRequest *req) {
     String networks;
     {

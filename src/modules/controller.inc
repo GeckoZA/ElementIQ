@@ -34,8 +34,16 @@ Preset preset = PRESET_CUSTOM;
 bool heaterOn = false;
 bool sensorFault = false;
 bool scheduleEnabled = false;
-uint8_t scheduleOnH = 5, scheduleOnM = 0;
-uint8_t scheduleOffH = 22, scheduleOffM = 0;
+// Per-day schedule: index 0=Mon ... 6=Sun, up to SCHED_SLOTS windows each
+static const uint8_t SCHED_SLOTS = 3;
+struct DayWindow { uint8_t enabled; uint8_t on_h, on_m, off_h, off_m; };
+DayWindow daySchedule[7][3]; // enabled=0 means empty slot
+void initDefaultSchedule() {
+  for (int d = 0; d < 7; d++) {
+    daySchedule[d][0] = {1, 5, 0, 22, 0};
+    for (int s = 1; s < 3; s++) daySchedule[d][s] = {0, 0, 0, 0, 0};
+  }
+}
 
 unsigned long lastRead = 0, heaterChangedAt = 0, boostStartedAt = 0;
 unsigned long lastMqttAttempt = 0, lastDiscovery = 0, lastLedCheck = 0;
@@ -118,7 +126,12 @@ struct Settings {
   float home_temp, away_temp, eco_temp, boost_min_temp;
   uint8_t preset;
   uint8_t schedule_enabled;
-  uint8_t sched_on_h, sched_on_m, sched_off_h, sched_off_m;
+  uint8_t sched_on_h, sched_on_m, sched_off_h, sched_off_m; // legacy v1
+  uint8_t day_enabled[7];
+  uint8_t day_on_h[7], day_on_m[7], day_off_h[7], day_off_m[7]; // legacy v2 single slot
+  // v3: up to 3 slots/day
+  uint8_t day_en3[7][3];
+  uint8_t day_on_h3[7][3], day_on_m3[7][3], day_off_h3[7][3], day_off_m3[7][3];
   uint32_t runtime_total;
   uint32_t magic;
   uint32_t schema_tag;
@@ -129,7 +142,7 @@ struct Settings {
 #define EEPROM_MAGIC 0x47455958
 #define EEPROM_SIZE sizeof(Settings)
 constexpr uint32_t SETTINGS_SCHEMA_TAG = 0x45514951;
-constexpr uint16_t SETTINGS_SCHEMA_VERSION = 1;
+constexpr uint16_t SETTINGS_SCHEMA_VERSION = 3;
 static_assert(offsetof(Settings, schema_tag) == offsetof(Settings, magic) + sizeof(uint32_t),
               "Settings schema fields must remain appended after the legacy layout");
 
@@ -158,18 +171,22 @@ void loadSettings() {
   eepromReady = EEPROM.begin(EEPROM_SIZE);
   if (!eepromReady) {
     Serial.println("[EEPROM] init failed; using defaults");
+    initDefaultSchedule();
     return;
   }
   settingsSaveOk = true;
   Settings s;
   EEPROM.get(0, s);
-  if (s.magic != EEPROM_MAGIC) return;
+  if (s.magic != EEPROM_MAGIC) { initDefaultSchedule(); return; }
   bool needsMigration = false;
   if (s.schema_tag == SETTINGS_SCHEMA_TAG) {
-    if (s.schema_version != SETTINGS_SCHEMA_VERSION ||
-        s.checksum != settingsChecksum(s)) {
+    if (s.schema_version == 1 || s.schema_version == 2) {
+      needsMigration = true; // upgrade schedule layout
+    } else if (s.schema_version != SETTINGS_SCHEMA_VERSION ||
+               s.checksum != settingsChecksum(s)) {
       Serial.println("[EEPROM] unsupported or corrupt settings; using defaults");
       settingsSaveOk = false;
+      initDefaultSchedule();
       return;
     }
   } else if (s.schema_tag == 0 || s.schema_tag == UINT32_MAX) {
@@ -182,6 +199,7 @@ void loadSettings() {
   if (!isfinite(s.setpoint) || s.setpoint < MIN_SETPOINT ||
       s.setpoint > MAX_SETPOINT || s.mode > static_cast<uint8_t>(MODE_BOOST)) {
     Serial.println("[EEPROM] invalid setpoint or mode; using defaults");
+    initDefaultSchedule();
     return;
   }
   setpoint = s.setpoint;
@@ -221,10 +239,44 @@ void loadSettings() {
   if (s.boost_min_temp >= 0 && s.boost_min_temp <= MAX_SETPOINT) boostMinTemp = s.boost_min_temp;
   if (s.preset <= PRESET_ECO) preset = (Preset)s.preset;
   scheduleEnabled = s.schedule_enabled != 0;
-  if (s.sched_on_h < 24) scheduleOnH = s.sched_on_h;
-  if (s.sched_on_m < 60) scheduleOnM = s.sched_on_m;
-  if (s.sched_off_h < 24) scheduleOffH = s.sched_off_h;
-  if (s.sched_off_m < 60) scheduleOffM = s.sched_off_m;
+  initDefaultSchedule();
+  bool anySlot = false;
+  // v3 multi-slot
+  for (int d = 0; d < 7; d++) {
+    for (int sidx = 0; sidx < 3; sidx++) {
+      if (s.day_en3[d][sidx] || (s.day_on_h3[d][sidx] || s.day_off_h3[d][sidx])) {
+        daySchedule[d][sidx].enabled = s.day_en3[d][sidx] ? 1 : 0;
+        daySchedule[d][sidx].on_h = s.day_on_h3[d][sidx] < 24 ? s.day_on_h3[d][sidx] : 0;
+        daySchedule[d][sidx].on_m = s.day_on_m3[d][sidx] < 60 ? s.day_on_m3[d][sidx] : 0;
+        daySchedule[d][sidx].off_h = s.day_off_h3[d][sidx] < 24 ? s.day_off_h3[d][sidx] : 0;
+        daySchedule[d][sidx].off_m = s.day_off_m3[d][sidx] < 60 ? s.day_off_m3[d][sidx] : 0;
+        if (daySchedule[d][sidx].enabled) anySlot = true;
+      }
+    }
+  }
+  // v2 single slot migration
+  if (!anySlot) {
+    for (int i = 0; i < 7; i++) {
+      if (s.day_on_h[i] < 24 && s.day_off_h[i] < 24) {
+        daySchedule[i][0] = {
+          (uint8_t)(s.day_enabled[i] ? 1 : 0),
+          s.day_on_h[i],
+          (uint8_t)(s.day_on_m[i] < 60 ? s.day_on_m[i] : 0),
+          s.day_off_h[i],
+          (uint8_t)(s.day_off_m[i] < 60 ? s.day_off_m[i] : 0)
+        };
+        anySlot = true;
+      }
+    }
+  }
+  // v1 single global window
+  if (!anySlot) {
+    uint8_t oh = s.sched_on_h < 24 ? s.sched_on_h : 5;
+    uint8_t om = s.sched_on_m < 60 ? s.sched_on_m : 0;
+    uint8_t fh = s.sched_off_h < 24 ? s.sched_off_h : 22;
+    uint8_t fm = s.sched_off_m < 60 ? s.sched_off_m : 0;
+    for (int i = 0; i < 7; i++) daySchedule[i][0] = {1, oh, om, fh, fm};
+  }
   runtimeTotalSec = s.runtime_total;
   char *portEnd = nullptr;
   unsigned long portValue = strtoul(mqtt_port, &portEnd, 10);
@@ -268,8 +320,22 @@ bool saveSettings() {
   s.home_temp = homeTemp; s.away_temp = awayTemp; s.eco_temp = ecoTemp;
   s.boost_min_temp = boostMinTemp; s.preset = preset;
   s.schedule_enabled = scheduleEnabled ? 1 : 0;
-  s.sched_on_h = scheduleOnH; s.sched_on_m = scheduleOnM;
-  s.sched_off_h = scheduleOffH; s.sched_off_m = scheduleOffM;
+  s.sched_on_h = daySchedule[0][0].on_h; s.sched_on_m = daySchedule[0][0].on_m;
+  s.sched_off_h = daySchedule[0][0].off_h; s.sched_off_m = daySchedule[0][0].off_m;
+  for (int i = 0; i < 7; i++) {
+    s.day_enabled[i] = daySchedule[i][0].enabled ? 1 : 0;
+    s.day_on_h[i] = daySchedule[i][0].on_h;
+    s.day_on_m[i] = daySchedule[i][0].on_m;
+    s.day_off_h[i] = daySchedule[i][0].off_h;
+    s.day_off_m[i] = daySchedule[i][0].off_m;
+    for (int sidx = 0; sidx < 3; sidx++) {
+      s.day_en3[i][sidx] = daySchedule[i][sidx].enabled ? 1 : 0;
+      s.day_on_h3[i][sidx] = daySchedule[i][sidx].on_h;
+      s.day_on_m3[i][sidx] = daySchedule[i][sidx].on_m;
+      s.day_off_h3[i][sidx] = daySchedule[i][sidx].off_h;
+      s.day_off_m3[i][sidx] = daySchedule[i][sidx].off_m;
+    }
+  }
   s.runtime_total = runtimeTotalSec;
   s.magic = EEPROM_MAGIC;
   s.schema_tag = SETTINGS_SCHEMA_TAG;
@@ -438,12 +504,26 @@ bool scheduleAllowsHeat() {
   if (now < 100000) return true; // no time → allow
   struct tm t;
   if (!localtime_r(&now, &t)) return true;
+  // tm_wday: 0=Sun..6=Sat → our index 0=Mon..6=Sun
+  int idx = (t.tm_wday == 0) ? 6 : (t.tm_wday - 1);
+  if (idx < 0 || idx > 6) return true;
   int nowM = t.tm_hour * 60 + t.tm_min;
-  int onM = scheduleOnH * 60 + scheduleOnM;
-  int offM = scheduleOffH * 60 + scheduleOffM;
-  if (onM == offM) return true; // zero-length = always
-  if (onM < offM) return nowM >= onM && nowM < offM; // same day
-  return nowM >= onM || nowM < offM; // overnight window
+  bool anyEnabled = false;
+  for (int sidx = 0; sidx < 3; sidx++) {
+    const DayWindow& d = daySchedule[idx][sidx];
+    if (!d.enabled) continue;
+    anyEnabled = true;
+    int onM = d.on_h * 60 + d.on_m;
+    int offM = d.off_h * 60 + d.off_m;
+    if (onM == offM) return true; // all day
+    if (onM < offM) {
+      if (nowM >= onM && nowM < offM) return true;
+    } else {
+      if (nowM >= onM || nowM < offM) return true; // overnight
+    }
+  }
+  // no enabled slots for today → block; if had enabled but none matched → block
+  return !anyEnabled ? false : false;
 }
 
 void setHeater(bool on, bool force) {

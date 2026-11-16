@@ -261,7 +261,18 @@ bool checkGitHubUpdate(bool install, const char* owner, const char* repo, String
   HTTPClient http; http.setTimeout(15000); http.setUserAgent("ElementIQ");
   if (!http.begin(client, api)) { result = "HTTP begin failed"; return false; }
   int code = http.GET();
-  if (code != 200) { result = String("API HTTP ") + code; http.end(); return false; }
+  if (code != 200) {
+    http.end();
+    if (code == 404) {
+      result = String("Repo/release not found: ") + owner + "/" + repo +
+               " (create a public GitHub Release with firmware.bin)";
+    } else if (code < 0) {
+      result = String("GitHub request failed (") + code + ")";
+    } else {
+      result = String("GitHub API HTTP ") + code;
+    }
+    return false;
+  }
   String body = http.getString(); http.end();
   JsonDocument doc;
   if (deserializeJson(doc, body)) { result = "JSON error"; return false; }

@@ -16,11 +16,11 @@ html,body{height:100%}
 body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh}
 /* ---- Sidebar (Shelly-style) ---- */
 .sidebar{width:220px;min-width:220px;background:var(--sidebar);border-right:1px solid var(--card-border);display:flex;flex-direction:column;padding:16px 12px;position:fixed;top:0;left:0;bottom:0;z-index:30;transition:transform .25s}
-.brand{display:flex;align-items:center;gap:10px;padding:8px 10px 18px;border-bottom:1px solid var(--card-border);margin-bottom:12px}
-.brand img{width:40px;height:40px;object-fit:contain;flex-shrink:0}
+.brand{display:flex;align-items:center;gap:12px;padding:8px 10px 18px;border-bottom:1px solid var(--card-border);margin-bottom:12px}
+.brand img{width:48px;height:48px;object-fit:contain;flex-shrink:0}
 .brand .brand-text{display:flex;flex-direction:column;line-height:1.15}
-.brand .brand-text strong{font-size:1.05rem;font-weight:700;background:linear-gradient(90deg,#3b9eff,#ff8c00);-webkit-background-clip:text;background-clip:text;color:transparent}
-.brand .brand-text small{font-size:.68rem;color:var(--muted);font-weight:500}
+.brand .brand-text strong{font-size:1.26rem;font-weight:700;background:linear-gradient(90deg,#3b9eff,#ff8c00);-webkit-background-clip:text;background-clip:text;color:transparent}
+.brand .brand-text small{font-size:.82rem;color:var(--muted);font-weight:500}
 .sidebar nav{display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto}
 .sidebar nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:600;transition:background .15s,color .15s}
 .sidebar nav a:hover{background:var(--hover);color:var(--text)}
@@ -31,8 +31,11 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .main{flex:1;margin-left:220px;min-width:0;display:flex;flex-direction:column;min-height:100vh}
 .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--card-border);background:var(--sidebar);position:sticky;top:0;z-index:20}
 .topbar .page-title{font-size:1rem;font-weight:600;color:var(--text)}
-.topbar .status-icons{display:flex;align-items:center;gap:12px;font-size:.8rem;color:var(--muted)}
-.topbar .status-icons .dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block}
+.topbar .status-icons{display:flex;align-items:center;gap:14px;font-size:.8rem;color:var(--muted)}
+.topbar .status-icons .conn-ico{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;opacity:.35;color:var(--muted);transition:opacity .2s,color .2s}
+.topbar .status-icons .conn-ico.on{opacity:1;color:var(--primary)}
+.topbar .status-icons .conn-ico svg{width:20px;height:20px;fill:currentColor}
+.topbar .status-icons #clock{font-variant-numeric:tabular-nums;min-width:3rem;text-align:right}
 .hamburger{display:none;width:40px;height:40px;border:none;border-radius:10px;background:var(--card);cursor:pointer;flex-direction:column;align-items:center;justify-content:center;gap:5px}
 .hamburger span{display:block;width:18px;height:2px;background:var(--text)}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:25;opacity:0;pointer-events:none;transition:.25s}
@@ -77,6 +80,20 @@ canvas.chart{width:100%;height:160px;background:var(--row);border-radius:10px;ma
 .stats div{background:var(--row);border-radius:10px;padding:10px 4px;border:1px solid var(--card-border)}
 .stats .n{font-size:1.1rem;font-weight:700;color:var(--primary)}
 .stats .l{font-size:.65rem;color:var(--muted);text-transform:uppercase}
+.list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.list a.row-link,.list .row-static{display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--card);border:1px solid var(--card-border);border-radius:12px;text-decoration:none;color:var(--text);cursor:pointer}
+.list a.row-link:hover{background:var(--hover)}
+.list .row-ico{width:36px;height:36px;border-radius:10px;background:rgba(59,158,255,.12);display:flex;align-items:center;justify-content:center;color:var(--primary);flex-shrink:0;font-size:1rem}
+.list .row-meta{flex:1;min-width:0}
+.list .row-meta strong{display:block;font-size:.95rem;font-weight:600}
+.list .row-meta small{display:block;color:var(--muted);font-size:.78rem;margin-top:2px}
+.list .chev{color:var(--muted);font-size:1.1rem}
+.back-btn{display:inline-flex;align-items:center;gap:6px;background:none;border:none;color:var(--primary);font-weight:600;cursor:pointer;padding:0;margin-bottom:12px;font-size:.9rem}
+.sec-title{font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 8px}
+.subview{display:none}
+.subview.active{display:block}
+#settings-menu.active,#conn-menu.active{display:block}
+
 /* Mobile: sidebar becomes drawer */
 @media(max-width:800px){
   .sidebar{transform:translateX(-100%)}
@@ -107,18 +124,30 @@ async function saveSettings(data){
     return true;
   }catch(e){alert('Save failed: '+e.message);return false}
 }
-async function loadTheme(){
+function setConnIcon(id, on, title){
+  const el=document.getElementById(id);
+  if(!el)return;
+  el.classList.toggle('on', !!on);
+  if(title) el.title=title;
+}
+async function refreshTopStatus(){
   try{
     const r=await fetch('/api/status');const d=await r.json();
     applyTheme(Number(d.theme||0));
     const c=document.getElementById('clock');if(c)c.textContent=d.time||'--:--';
     const t=document.getElementById('top-title');
     if(t&&d.friendly_name)t.textContent=d.friendly_name;
-    const ip=document.getElementById('top-ip');
-    if(ip)ip.textContent=(d.ip&&d.ip!=='0.0.0.0')?d.ip:'AP mode';
+    const ip=d.ip||'';
+    const wifiOn=ip&&ip!=='0.0.0.0'&&!String(ip).startsWith('192.168.4.');
+    setConnIcon('ico-wifi', wifiOn, wifiOn?('Wi‑Fi '+ip+(d.rssi!=null?' · '+d.rssi+' dBm':'')):'Wi‑Fi disconnected');
+    const mqttOn=!!d.mqtt_connected;
+    setConnIcon('ico-mqtt', mqttOn, mqttOn?('MQTT connected'+(d.mqtt_host?' · '+d.mqtt_host:'')):(d.mqtt_enabled===false?'MQTT disabled':'MQTT offline'));
+    setConnIcon('ico-ap', !!d.ap_enabled, d.ap_enabled?('AP on'+(d.ap_name?' · '+d.ap_name:'')):'AP off');
   }catch(e){}
 }
+async function loadTheme(){await refreshTopStatus()}
 loadTheme();
+setInterval(refreshTopStatus,5000);
 </script>
 )rawliteral";
 
@@ -137,11 +166,9 @@ String navHtml(const char* active) {
   <nav>
 )nav";
   s += String("<a href=\"/\" class=\"") + cls("home") + "\"><span class=\"ico\">⌂</span>Home</a>";
-  s += String("<a href=\"/connections\" class=\"") + cls("connections") + "\"><span class=\"ico\">⚙</span>Connections</a>";
-  s += String("<a href=\"/time\" class=\"") + cls("time") + "\"><span class=\"ico\">⏱</span>Time</a>";
-  s += String("<a href=\"/temperature\" class=\"") + cls("temperature") + "\"><span class=\"ico\">🌡</span>Temperature</a>";
   s += String("<a href=\"/schedule\" class=\"") + cls("schedule") + "\"><span class=\"ico\">📅</span>Schedule</a>";
-  s += String("<a href=\"/stats\" class=\"") + cls("stats") + "\"><span class=\"ico\">📊</span>Stats</a>";
+  s += String("<a href=\"/connections\" class=\"") + cls("connections") + "\"><span class=\"ico\">🔗</span>Connections</a>";
+  s += String("<a href=\"/settings\" class=\"") + cls("settings") + "\"><span class=\"ico\">⚙</span>Settings</a>";
   s += String("<a href=\"/update\" class=\"") + cls("update") + "\"><span class=\"ico\">⟳</span>Update</a>";
   s += R"nav(
   </nav>
@@ -151,7 +178,12 @@ String navHtml(const char* active) {
   <div class="topbar">
     <button class="hamburger" onclick="toggleMenu()" aria-label="Menu"><span></span><span></span><span></span></button>
     <div class="page-title" id="top-title">ElementIQ</div>
-    <div class="status-icons"><span class="dot"></span><span id="top-ip">…</span><span id="clock">--:--</span></div>
+    <div class="status-icons">
+      <span class="conn-ico" id="ico-wifi" title="Wi‑Fi"><svg viewBox="0 0 24 24"><path d="M12 18.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm-4.07-3.03a1 1 0 0 0 1.41 0 4 4 0 0 1 5.32 0 1 1 0 1 0 1.41-1.41 6 6 0 0 0-8.14 0 1 1 0 0 0 0 1.41zm-2.83-2.83a1 1 0 0 0 1.41 0 8 8 0 0 1 11 0 1 1 0 1 0 1.41-1.41 10 10 0 0 0-13.82 0 1 1 0 0 0 0 1.41z"/></svg></span>
+      <span class="conn-ico" id="ico-mqtt" title="MQTT"><svg viewBox="0 0 24 24"><path d="M5 3v18h2v-7.5c0-2.5 1.5-3.5 3.5-3.5H13V8H9.5C6.5 8 5 10 5 13V3zm9 5v2h2.5c1.4 0 2.5 1.1 2.5 2.5V21h2V12.5C21 9.5 18.5 8 16 8H14z"/></svg></span>
+      <span class="conn-ico" id="ico-ap" title="Access point"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9h2a7 7 0 0 1 14 0h2a9 9 0 0 0-9-9zm0 4a5 5 0 0 0-5 5h2a3 3 0 0 1 6 0h2a5 5 0 0 0-5-5zm0 4a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm-1 3v7h2v-7h-2z"/></svg></span>
+      <span id="clock">--:--</span>
+    </div>
   </div>
   <div class="content">
 )nav";
@@ -184,6 +216,16 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
   </div>
   <div class="hint" id="schedHint" style="margin-top:10px;text-align:center"></div>
 </div>
+
+<div class="card"><h2>Runtime</h2>
+<div class="stats">
+  <div><div class="n" id="rt_today">0</div><div class="l">Today (h)</div></div>
+  <div><div class="n" id="rt_week">0</div><div class="l">Week (h)</div></div>
+  <div><div class="n" id="rt_total">0</div><div class="l">Total (h)</div></div>
+</div>
+<canvas class="chart" id="chart" width="640" height="160"></canvas>
+<div class="hint" id="chartHint">Temperature history</div>
+</div>
 <div class="footer"><div id="clock">--:--</div><div id="info"></div></div>
 <script>
 const MIN=30,MAX=100,SPAN=MAX-MIN,CIRC=494.8;let setpoint=55,dragging=false;
@@ -214,7 +256,20 @@ async function update(){try{
   document.getElementById('schedHint').textContent=d.schedule_enabled?(d.schedule_active?'Schedule: in window':'Schedule: outside window – heating blocked'):'';
   document.getElementById('clock').textContent=d.time||'--:--';
   document.getElementById('info').textContent='IP '+(d.ip||'—')+'  ·  v'+d.version;
+  const hrs=s=>((Number(s)||0)/3600).toFixed(1);
+  const el=id=>document.getElementById(id);
+  if(el('rt_today')){el('rt_today').textContent=hrs(d.runtime_today_sec);el('rt_week').textContent=hrs(d.runtime_week_sec);el('rt_total').textContent=hrs(d.runtime_total_sec);}
   applyTheme(Number(d.theme||0));
+  if(window._lastHist===undefined){window._lastHist=0}
+  if(Date.now()-window._lastHist>30000){window._lastHist=Date.now();fetch('/api/history').then(r=>r.json()).then(h=>{
+    const c=document.getElementById('chart');if(!c||!h.temps)return;const ctx=c.getContext('2d');
+    const w=c.width,hgt=c.height;ctx.clearRect(0,0,w,hgt);const temps=h.temps;if(!temps.length)return;
+    let mn=Math.min.apply(null,temps),mx=Math.max.apply(null,temps);if(mx-mn<2){mx+=1;mn-=1;}
+    ctx.strokeStyle=getComputedStyle(document.body).getPropertyValue('--primary')||'#3b9eff';ctx.lineWidth=2;ctx.beginPath();
+    temps.forEach((v,i)=>{const x=i/(temps.length-1||1)*(w-8)+4;const y=hgt-4-((v-mn)/(mx-mn||1))*(hgt-12);i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();
+    document.getElementById('chartHint').textContent=temps.length+' samples · '+mn.toFixed(1)+'–'+mx.toFixed(1)+'°C';
+  }).catch(()=>{});}
+
 }catch(e){}}
 setInterval(update,2000);update();
 </script>
@@ -224,102 +279,70 @@ setInterval(update,2000);update();
 )rawliteral";
 
 const char CONNECTIONS_BODY[] PROGMEM = R"rawliteral(
-<div class="card"><h1>Connections</h1>
-<div class="hint" id="wifi_status" style="margin-bottom:14px;font-size:.9rem;color:var(--primary-bright)">-</div>
-<section id="ap"><h3 style="font-size:.8rem;color:var(--muted)">Access Point</h3>
-<label class="row">Enable AP when online <input type="checkbox" id="ap_enabled"></label>
-<label>AP Name</label><input type="text" id="ap_name" maxlength="31">
-<label>AP Password</label><input type="password" id="ap_pass" maxlength="31" autocomplete="new-password" placeholder="Leave blank to keep current">
-<label class="row">Use open AP (clear password) <input type="checkbox" id="ap_open"></label>
-<div class="hint">A password must be 8–31 characters. New devices start with an open AP.</div></section>
-<section id="mqtt" style="margin-top:16px"><h3 style="font-size:.8rem;color:var(--muted)">MQTT</h3>
-<label class="row">Enable MQTT <input type="checkbox" id="mqtt_enabled"></label>
-<label>Broker host</label><input type="text" id="mqtt_host">
-<label>Port</label><input type="text" id="mqtt_port" value="1883">
-<label>User</label><input type="text" id="mqtt_user">
-<label>Password</label><input type="password" id="mqtt_pass" placeholder="Leave blank to keep">
-<div class="hint" id="mqtt_status">-</div></section>
-<label>Friendly name</label><input type="text" id="friendly_name" maxlength="39">
-<label>Theme</label><select id="theme"><option value="0">Blue</option><option value="1">Dark</option><option value="2">Light</option></select>
-<button class="save" onclick="save()">Save</button>
-<div class="hint" style="margin-top:12px"><a href="/api/resetwifi" style="color:var(--primary-bright)" onclick="return confirm('Forget WiFi?')">Reset WiFi</a></div>
-</div><div class="footer"><div id="clock">--:--</div></div>
-<script>
-async function load(){const d=await(await fetch('/api/status')).json();
-document.getElementById('ap_enabled').checked=!!d.ap_enabled;document.getElementById('ap_name').value=d.ap_name||'';
-document.getElementById('ap_open').checked=!d.ap_password_configured;
-document.getElementById('mqtt_enabled').checked=d.mqtt_enabled!==false;document.getElementById('mqtt_host').value=d.mqtt_host||'';
-document.getElementById('mqtt_port').value=d.mqtt_port||'1883';document.getElementById('mqtt_user').value=d.mqtt_user||'';
-document.getElementById('friendly_name').value=d.friendly_name||'';document.getElementById('theme').value=String(d.theme||0);
-document.getElementById('mqtt_status').textContent=d.mqtt_enabled===false?'MQTT: disabled':(d.mqtt_host?('MQTT: '+(d.mqtt_connected?'ok':'down')):'not set');
-const ip=d.ip||'';
-document.getElementById('wifi_status').textContent=ip&&ip!=='0.0.0.0'?('WiFi IP: '+ip+'  ·  mDNS: ElementIQ.local'):'Not connected to WiFi';
-if(d.settings_saved===false)document.getElementById('wifi_status').textContent+=' · Settings not persisted';
-document.getElementById('clock').textContent=d.time||'--:--';applyTheme(Number(d.theme||0))}
-async function save(){const data={
-ap_enabled:document.getElementById('ap_enabled').checked,ap_name:document.getElementById('ap_name').value,
-mqtt_enabled:document.getElementById('mqtt_enabled').checked,mqtt_host:document.getElementById('mqtt_host').value,mqtt_port:document.getElementById('mqtt_port').value,
-mqtt_user:document.getElementById('mqtt_user').value,mqtt_pass:document.getElementById('mqtt_pass').value,
-friendly_name:document.getElementById('friendly_name').value,theme:parseInt(document.getElementById('theme').value)||0};
-const apPass=document.getElementById('ap_pass').value;
-if(apPass||document.getElementById('ap_open').checked)data.ap_pass=apPass;
-if(!await saveSettings(data))return;
-document.getElementById('mqtt_pass').value='';document.getElementById('ap_pass').value='';alert('Saved');load()}
-load();
-</script>
-</div><!--content-->
-</div><!--main-->
-</body></html>
-)rawliteral";
-
-const char TIME_BODY[] PROGMEM = R"rawliteral(
-<div class="card"><h1>Time</h1>
-<label>Timezone offset (hours UTC)</label><input type="number" id="tz" min="-12" max="14" value="2">
-<div class="hint">SAST = 2 | Current: <span id="clock2">--:--</span></div>
-<button class="save" onclick="save()">Save</button></div>
+<div id="conn-menu" class="subview active">
+  <div class="sec-title">Status</div>
+  <div class="list">
+    <div class="row-static"><div class="row-ico">📶</div><div class="row-meta"><strong>Wi‑Fi</strong><small id="wifi_status">-</small></div></div>
+    <div class="row-static"><div class="row-ico">📡</div><div class="row-meta"><strong>MQTT</strong><small id="mqtt_status">-</small></div></div>
+  </div>
+  <div class="sec-title">Network settings</div>
+  <div class="list">
+    <a class="row-link" href="#" onclick="showConn('ap');return false"><div class="row-ico">📻</div><div class="row-meta"><strong>Access point</strong><small>AP name, password, enable when online</small></div><span class="chev">›</span></a>
+    <a class="row-link" href="#" onclick="showConn('mqtt');return false"><div class="row-ico">🔗</div><div class="row-meta"><strong>MQTT</strong><small>Broker, credentials, enable</small></div><span class="chev">›</span></a>
+  </div>
+</div>
+<div id="conn-ap" class="subview">
+  <button class="back-btn" onclick="showConn('menu')">‹ Back</button>
+  <div class="card"><h1>Access point</h1>
+  <label class="row">Enable AP when online <input type="checkbox" id="ap_enabled"></label>
+  <label>AP Name</label><input type="text" id="ap_name" maxlength="31">
+  <label>AP Password</label><input type="password" id="ap_pass" maxlength="31" autocomplete="new-password" placeholder="Leave blank to keep current">
+  <label class="row">Use open AP (clear password) <input type="checkbox" id="ap_open"></label>
+  <div class="hint">Password must be 8–31 characters, or leave open.</div>
+  <button class="save" onclick="saveAp()">Save</button></div>
+</div>
+<div id="conn-mqtt" class="subview">
+  <button class="back-btn" onclick="showConn('menu')">‹ Back</button>
+  <div class="card"><h1>MQTT</h1>
+  <label class="row">Enable MQTT <input type="checkbox" id="mqtt_enabled"></label>
+  <label>Broker host</label><input type="text" id="mqtt_host">
+  <label>Port</label><input type="text" id="mqtt_port" value="1883">
+  <label>User</label><input type="text" id="mqtt_user">
+  <label>Password</label><input type="password" id="mqtt_pass" placeholder="Leave blank to keep">
+  <button class="save" onclick="saveMqtt()">Save</button></div>
+</div>
 <div class="footer"><div id="clock">--:--</div></div>
 <script>
-async function load(){const d=await(await fetch('/api/status')).json();
-document.getElementById('tz').value=d.tz!=null?d.tz:2;document.getElementById('clock').textContent=d.time||'--:--';
-document.getElementById('clock2').textContent=d.time||'--:--';applyTheme(Number(d.theme||0))}
-async function save(){if(!await saveSettings({tz:parseInt(document.getElementById('tz').value)||2}))return;alert('Saved');load()}
-load();setInterval(load,30000);
-</script>
-</div><!--content-->
-</div><!--main-->
-</body></html>
-)rawliteral";
-
-const char TEMP_BODY[] PROGMEM = R"rawliteral(
-<div class="card"><h1>Temperature</h1>
-<label>Auto setpoint (°C)</label><input type="number" id="setpoint" min="30" max="100" step="0.5">
-<label>Boost temperature (°C)</label><input type="number" id="boost_temp" min="30" max="100" step="0.5">
-<label>Soft min for boost (°C, 0=off)</label><input type="number" id="boost_min" min="0" max="100" step="0.5">
-<div class="hint">Boost only starts if current temp is below this (avoids useless boosts)</div>
-<label>Hysteresis (°C under to re-on)</label><input type="number" id="hysteresis" min="0.5" max="20" step="0.5">
-<label>Home preset (°C)</label><input type="number" id="home_temp" min="30" max="100" step="0.5">
-<label>Away preset (°C)</label><input type="number" id="away_temp" min="30" max="100" step="0.5">
-<label>Eco preset (°C)</label><input type="number" id="eco_temp" min="30" max="100" step="0.5">
-<label>Min ON (s)</label><input type="number" id="min_on" min="5" max="600">
-<label>Min OFF (s)</label><input type="number" id="min_off" min="5" max="600">
-<button class="save" onclick="save()">Save</button></div>
-<div class="footer"><div id="clock">--:--</div></div>
-<script>
-async function load(){const d=await(await fetch('/api/status')).json();
-document.getElementById('setpoint').value=d.setpoint;document.getElementById('boost_temp').value=d.boost_temp;
-document.getElementById('boost_min').value=d.boost_min_temp;document.getElementById('hysteresis').value=d.hysteresis;
-document.getElementById('home_temp').value=d.home_temp;document.getElementById('away_temp').value=d.away_temp;
-document.getElementById('eco_temp').value=d.eco_temp;
-document.getElementById('min_on').value=Math.round((d.min_on_ms||30000)/1000);
-document.getElementById('min_off').value=Math.round((d.min_off_ms||30000)/1000);
-document.getElementById('clock').textContent=d.time||'--:--';applyTheme(Number(d.theme||0))}
-async function save(){if(!await saveSettings({
-setpoint:+document.getElementById('setpoint').value,boost_temp:+document.getElementById('boost_temp').value,
-boost_min_temp:+document.getElementById('boost_min').value,hysteresis:+document.getElementById('hysteresis').value,
-home_temp:+document.getElementById('home_temp').value,away_temp:+document.getElementById('away_temp').value,
-eco_temp:+document.getElementById('eco_temp').value,
-min_on_ms:+document.getElementById('min_on').value*1000,min_off_ms:+document.getElementById('min_off').value*1000}))return;
-alert('Saved');load()}
+function showConn(id){
+  document.querySelectorAll('#conn-menu,#conn-ap,#conn-mqtt').forEach(e=>e.classList.remove('active'));
+  document.getElementById(id==='menu'?'conn-menu':'conn-'+id).classList.add('active');
+}
+async function load(){
+  const d=await(await fetch('/api/status')).json();
+  const ip=d.ip||'';
+  document.getElementById('wifi_status').textContent=ip&&ip!=='0.0.0.0'?('Connected · '+ip+(d.rssi!=null?' · '+d.rssi+' dBm':'')):'Not connected';
+  document.getElementById('mqtt_status').textContent=d.mqtt_enabled===false?'Disabled':(d.mqtt_host?(d.mqtt_connected?'Connected to '+d.mqtt_host:'Configured · offline'):'Not set');
+  document.getElementById('ap_enabled').checked=!!d.ap_enabled;
+  document.getElementById('ap_name').value=d.ap_name||'';
+  document.getElementById('ap_open').checked=!d.ap_password_configured;
+  document.getElementById('mqtt_enabled').checked=d.mqtt_enabled!==false;
+  document.getElementById('mqtt_host').value=d.mqtt_host||'';
+  document.getElementById('mqtt_port').value=d.mqtt_port||'1883';
+  document.getElementById('mqtt_user').value=d.mqtt_user||'';
+  document.getElementById('clock').textContent=d.time||'--:--';
+  applyTheme(Number(d.theme||0));
+}
+async function saveAp(){
+  if(!await saveSettings({ap_enabled:document.getElementById('ap_enabled').checked,ap_name:document.getElementById('ap_name').value,
+    ap_pass:document.getElementById('ap_open').checked?'':document.getElementById('ap_pass').value}))return;
+  alert('Saved');load();showConn('menu');
+}
+async function saveMqtt(){
+  if(!await saveSettings({mqtt_enabled:document.getElementById('mqtt_enabled').checked,mqtt_host:document.getElementById('mqtt_host').value,
+    mqtt_port:document.getElementById('mqtt_port').value,mqtt_user:document.getElementById('mqtt_user').value,
+    mqtt_pass:document.getElementById('mqtt_pass').value}))return;
+  alert('Saved');load();showConn('menu');
+}
 load();
 </script>
 </div><!--content-->
@@ -330,69 +353,153 @@ load();
 const char SCHEDULE_BODY[] PROGMEM = R"rawliteral(
 <div class="card"><h1>Schedule</h1>
 <label class="row">Enable schedule <input type="checkbox" id="schedule_enabled"></label>
-<div class="hint">When enabled, Auto only heats inside the window. Boost still works anytime. Outside window heater is forced off.</div>
-<label>Heat allowed from (hour)</label><input type="number" id="on_h" min="0" max="23">
-<label>From (minute)</label><input type="number" id="on_m" min="0" max="59">
-<label>Until (hour)</label><input type="number" id="off_h" min="0" max="23">
-<label>Until (minute)</label><input type="number" id="off_m" min="0" max="59">
-<div class="hint">Overnight windows OK (e.g. 22:00 → 06:00)</div>
+<div class="hint">Auto heats only inside a day's windows (24h). Boost always works. Up to 3 windows per day.</div>
+<div id="days"></div>
 <button class="save" onclick="save()">Save</button>
 <div class="hint" id="status" style="margin-top:12px"></div>
 </div><div class="footer"><div id="clock">--:--</div></div>
 <script>
-async function load(){const d=await(await fetch('/api/status')).json();
-document.getElementById('schedule_enabled').checked=!!d.schedule_enabled;
-document.getElementById('on_h').value=d.sched_on_h;document.getElementById('on_m').value=d.sched_on_m;
-document.getElementById('off_h').value=d.sched_off_h;document.getElementById('off_m').value=d.sched_off_m;
-document.getElementById('status').textContent=d.schedule_enabled?(d.schedule_active?'Currently IN heating window':'Currently OUTSIDE heating window'):'Schedule off';
-document.getElementById('clock').textContent=d.time||'--:--';applyTheme(Number(d.theme||0))}
-async function save(){if(!await saveSettings({
-schedule_enabled:document.getElementById('schedule_enabled').checked,
-sched_on_h:+document.getElementById('on_h').value,sched_on_m:+document.getElementById('on_m').value,
-sched_off_h:+document.getElementById('off_h').value,sched_off_m:+document.getElementById('off_m').value}))return;
-alert('Saved');load()}
-load();setInterval(load,15000);
+const DAY_NAMES=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+let entries=[];
+function emptyDay(d){return {day:d,enabled:true,on:'05:00',off:'22:00'}}
+function render(){
+  const box=document.getElementById('days');box.innerHTML='';
+  for(let d=0;d<7;d++){
+    const dayEntries=entries.filter(e=>e.day===d);
+    let html=`<div class="sec-title">${DAY_NAMES[d]}</div><div class="list">`;
+    if(!dayEntries.length){
+      html+=`<div class="row-static"><div class="row-meta"><strong>No windows</strong><small>Heating blocked if schedule on</small></div>
+        <button type="button" class="save" style="width:auto;margin:0;padding:8px 12px" onclick="addEntry(${d})">Add</button></div>`;
+    } else {
+      dayEntries.forEach((e,i)=>{
+        const idx=entries.indexOf(e);
+        html+=`<div class="row-static" style="flex-wrap:wrap">
+          <label class="row" style="margin:0;gap:8px"><input type="checkbox" ${e.enabled?'checked':''} onchange="entries[${idx}].enabled=this.checked"> On</label>
+          <input type="time" value="${e.on||'05:00'}" onchange="entries[${idx}].on=this.value" style="width:auto">
+          <span class="hint" style="margin:0">to</span>
+          <input type="time" value="${e.off||'22:00'}" onchange="entries[${idx}].off=this.value" style="width:auto">
+          <button type="button" style="margin-left:auto;background:none;border:none;color:#f87171;cursor:pointer;font-size:1.1rem" onclick="removeEntry(${idx})" title="Remove">✕</button>
+        </div>`;
+      });
+      if(dayEntries.length<3){
+        html+=`<a class="row-link" href="#" onclick="addEntry(${d});return false"><div class="row-meta"><strong>+ Add window</strong></div></a>`;
+      }
+    }
+    html+='</div>';
+    box.innerHTML+=html;
+  }
+}
+function addEntry(d){
+  if(entries.filter(e=>e.day===d).length>=3)return;
+  entries.push(emptyDay(d));render();
+}
+function removeEntry(i){entries.splice(i,1);render()}
+async function load(){
+  const d=await(await fetch('/api/status')).json();
+  document.getElementById('schedule_enabled').checked=!!d.schedule_enabled;
+  entries=(d.schedule||[]).map(e=>({day:Number(e.day),enabled:!!e.enabled,on:e.on||'05:00',off:e.off||'22:00'}));
+  // ensure each day visible even if empty
+  render();
+  document.getElementById('status').textContent=d.schedule_enabled?(d.schedule_active?'Currently IN heating window':'Currently OUTSIDE heating window'):'Schedule off';
+  document.getElementById('clock').textContent=d.time||'--:--';applyTheme(Number(d.theme||0));
+}
+async function save(){
+  if(!await saveSettings({schedule_enabled:document.getElementById('schedule_enabled').checked,schedule:entries}))return;
+  alert('Saved');load();
+}
+load();setInterval(async()=>{const d=await(await fetch('/api/status')).json();
+  document.getElementById('status').textContent=d.schedule_enabled?(d.schedule_active?'Currently IN heating window':'Currently OUTSIDE heating window'):'Schedule off';
+  document.getElementById('clock').textContent=d.time||'--:--';},15000);
 </script>
 </div><!--content-->
 </div><!--main-->
 </body></html>
 )rawliteral";
 
-const char STATS_BODY[] PROGMEM = R"rawliteral(
-<div class="card"><h1>Stats & temperature</h1>
-<div class="stats">
-  <div><div class="n" id="rtoday">-</div><div class="l">Today (h)</div></div>
-  <div><div class="n" id="rweek">-</div><div class="l">Week (h)</div></div>
-  <div><div class="n" id="rtotal">-</div><div class="l">Total (h)</div></div>
+const char SETTINGS_BODY[] PROGMEM = R"rawliteral(
+<div id="settings-menu" class="subview active">
+  <div class="sec-title">Device settings</div>
+  <div class="list">
+    <a class="row-link" href="#" onclick="showSet('device');return false"><div class="row-ico">🏷️</div><div class="row-meta"><strong>Device name</strong><small id="sum_name">-</small></div><span class="chev">›</span></a>
+    <a class="row-link" href="#" onclick="showSet('time');return false"><div class="row-ico">🌐</div><div class="row-meta"><strong>Location and time</strong><small id="sum_tz">Timezone</small></div><span class="chev">›</span></a>
+    <a class="row-link" href="#" onclick="showSet('temp');return false"><div class="row-ico">🌡️</div><div class="row-meta"><strong>Temperature</strong><small>Setpoints, hysteresis, presets</small></div><span class="chev">›</span></a>
+    <a class="row-link" href="#" onclick="showSet('appear');return false"><div class="row-ico">🎨</div><div class="row-meta"><strong>Appearance</strong><small id="sum_theme">Theme</small></div><span class="chev">›</span></a>
+    <a class="row-link" href="/update"><div class="row-ico">💾</div><div class="row-meta"><strong>Firmware</strong><small id="sum_ver">Update & reset</small></div><span class="chev">›</span></a>
+  </div>
 </div>
-<canvas class="chart" id="chart" width="400" height="160"></canvas>
-<div class="hint" id="chartHint">Loading history…</div>
-</div><div class="footer"><div id="clock">--:--</div></div>
+<div id="set-device" class="subview">
+  <button class="back-btn" onclick="showSet('menu')">‹ Back</button>
+  <div class="card"><h1>Device name</h1>
+  <label>Friendly name</label><input type="text" id="friendly_name" maxlength="39">
+  <button class="save" onclick="saveDevice()">Save</button></div>
+</div>
+<div id="set-time" class="subview">
+  <button class="back-btn" onclick="showSet('menu')">‹ Back</button>
+  <div class="card"><h1>Location and time</h1>
+  <label>Timezone offset (hours from UTC)</label><input type="number" id="tz" min="-12" max="14" step="1">
+  <div class="hint">Example: SAST = 2 · Current time: <span id="time_now">--:--</span></div>
+  <button class="save" onclick="saveTime()">Save</button></div>
+</div>
+<div id="set-temp" class="subview">
+  <button class="back-btn" onclick="showSet('menu')">‹ Back</button>
+  <div class="card"><h1>Temperature</h1>
+  <label>Auto setpoint (°C)</label><input type="number" id="setpoint" min="30" max="100" step="0.5">
+  <label>Boost temperature (°C)</label><input type="number" id="boost_temp" min="30" max="100" step="0.5">
+  <label>Boost only if below (°C, 0=always)</label><input type="number" id="boost_min" min="0" max="100" step="0.5">
+  <label>Hysteresis (°C under to re-on)</label><input type="number" id="hysteresis" min="0.5" max="20" step="0.5">
+  <label>Home preset (°C)</label><input type="number" id="home_temp" min="30" max="100" step="0.5">
+  <label>Away preset (°C)</label><input type="number" id="away_temp" min="30" max="100" step="0.5">
+  <label>Eco preset (°C)</label><input type="number" id="eco_temp" min="30" max="100" step="0.5">
+  <label>Min on time (seconds)</label><input type="number" id="min_on" min="5" max="600" step="1">
+  <label>Min off time (seconds)</label><input type="number" id="min_off" min="5" max="600" step="1">
+  <button class="save" onclick="saveTemp()">Save</button></div>
+</div>
+<div id="set-appear" class="subview">
+  <button class="back-btn" onclick="showSet('menu')">‹ Back</button>
+  <div class="card"><h1>Appearance</h1>
+  <label>Theme</label><select id="theme"><option value="0">Blue</option><option value="1">Dark</option><option value="2">Light</option></select>
+  <button class="save" onclick="saveAppear()">Save</button></div>
+</div>
+<div class="footer"><div id="clock">--:--</div></div>
 <script>
-function drawChart(temps){
-  const c=document.getElementById('chart'),ctx=c.getContext('2d');
-  const w=c.width,h=c.height;ctx.clearRect(0,0,w,h);
-  if(!temps||temps.length<2){document.getElementById('chartHint').textContent='Not enough samples yet';return}
-  let mn=Math.min(...temps),mx=Math.max(...temps);if(mx-mn<2){mn-=1;mx+=1}
-  ctx.strokeStyle=getComputedStyle(document.body).getPropertyValue('--track')||'#123050';
-  ctx.beginPath();ctx.moveTo(0,h-1);ctx.lineTo(w,h-1);ctx.stroke();
-  ctx.strokeStyle=getComputedStyle(document.body).getPropertyValue('--primary-bright')||'#3b9eff';
-  ctx.lineWidth=2;ctx.beginPath();
-  temps.forEach((t,i)=>{const x=i/(temps.length-1)*w,y=h-4-((t-mn)/(mx-mn))*(h-12);
-    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});
-  ctx.stroke();
-  document.getElementById('chartHint').textContent=temps.length+' samples · min '+mn.toFixed(1)+' · max '+mx.toFixed(1)+' °C';
+function showSet(id){
+  document.querySelectorAll('#settings-menu,#set-device,#set-time,#set-temp,#set-appear').forEach(e=>e.classList.remove('active'));
+  document.getElementById(id==='menu'?'settings-menu':'set-'+id).classList.add('active');
 }
+const themeNames=['Blue','Dark','Light'];
 async function load(){
   const d=await(await fetch('/api/status')).json();
-  document.getElementById('rtoday').textContent=(d.runtime_today_sec/3600).toFixed(2);
-  document.getElementById('rweek').textContent=(d.runtime_week_sec/3600).toFixed(2);
-  document.getElementById('rtotal').textContent=(d.runtime_total_sec/3600).toFixed(1);
-  document.getElementById('clock').textContent=d.time||'--:--';applyTheme(Number(d.theme||0));
-  const h=await(await fetch('/api/history')).json();
-  drawChart((h.temps||[]).map(Number));
+  document.getElementById('friendly_name').value=d.friendly_name||'';
+  document.getElementById('sum_name').textContent=d.friendly_name||'ElementIQ';
+  document.getElementById('tz').value=d.tz??2;
+  document.getElementById('sum_tz').textContent='UTC'+(d.tz>=0?'+':'')+d.tz;
+  document.getElementById('time_now').textContent=d.time||'--:--';
+  document.getElementById('setpoint').value=d.setpoint;
+  document.getElementById('boost_temp').value=d.boost_temp;
+  document.getElementById('boost_min').value=d.boost_min_temp??0;
+  document.getElementById('hysteresis').value=d.hysteresis;
+  document.getElementById('home_temp').value=d.home_temp;
+  document.getElementById('away_temp').value=d.away_temp;
+  document.getElementById('eco_temp').value=d.eco_temp;
+  document.getElementById('min_on').value=Math.round((d.min_on_ms||0)/1000);
+  document.getElementById('min_off').value=Math.round((d.min_off_ms||0)/1000);
+  document.getElementById('theme').value=String(d.theme||0);
+  document.getElementById('sum_theme').textContent=themeNames[d.theme||0]||'Blue';
+  document.getElementById('sum_ver').textContent=d.version||'';
+  document.getElementById('clock').textContent=d.time||'--:--';
+  applyTheme(Number(d.theme||0));
 }
-load();setInterval(load,10000);
+async function saveDevice(){if(!await saveSettings({friendly_name:document.getElementById('friendly_name').value}))return;alert('Saved');load();showSet('menu')}
+async function saveTime(){if(!await saveSettings({tz:parseInt(document.getElementById('tz').value)||0}))return;alert('Saved');load();showSet('menu')}
+async function saveTemp(){if(!await saveSettings({
+  setpoint:+document.getElementById('setpoint').value,boost_temp:+document.getElementById('boost_temp').value,
+  boost_min_temp:+document.getElementById('boost_min').value,hysteresis:+document.getElementById('hysteresis').value,
+  home_temp:+document.getElementById('home_temp').value,away_temp:+document.getElementById('away_temp').value,
+  eco_temp:+document.getElementById('eco_temp').value,
+  min_on_ms:+document.getElementById('min_on').value*1000,min_off_ms:+document.getElementById('min_off').value*1000
+}))return;alert('Saved');load();showSet('menu')}
+async function saveAppear(){const th=parseInt(document.getElementById('theme').value)||0;if(!await saveSettings({theme:th}))return;applyTheme(th);alert('Saved');load();showSet('menu')}
+load();
 </script>
 </div><!--content-->
 </div><!--main-->
@@ -403,9 +510,10 @@ const char UPDATE_BODY[] PROGMEM = R"rawliteral(
 <div class="card"><h1>Update & reset</h1>
 <p class="hint">Version: <strong id="ver">-</strong></p>
 <p class="hint" id="ota_msg">-</p>
-<label>GitHub owner</label><input type="text" id="github_owner">
-<label>GitHub repo</label><input type="text" id="github_repo">
-<div class="hint">Release asset must be <code>firmware.bin</code></div>
+<p class="hint">Project: <a href="https://github.com/GeckoZA/ElementIQ" style="color:var(--primary)">github.com/GeckoZA/ElementIQ</a></p>
+<label>GitHub owner</label><input type="text" id="github_owner" placeholder="GeckoZA">
+<label>GitHub repo</label><input type="text" id="github_repo" placeholder="ElementIQ">
+<div class="hint">Latest release must include asset <code>firmware.bin</code></div>
 <label class="row">Auto-check on boot <input type="checkbox" id="ota_auto"></label>
 <button class="save" onclick="saveGh()">Save GitHub</button>
 <button class="save" style="background:#0d9488" onclick="check()">Check update</button>
@@ -418,7 +526,7 @@ const char UPDATE_BODY[] PROGMEM = R"rawliteral(
 <script>
 async function load(){const d=await(await fetch('/api/status')).json();
 document.getElementById('ver').textContent=d.version;document.getElementById('ota_msg').textContent=d.ota_msg||'Idle';
-document.getElementById('github_owner').value=d.github_owner||'';document.getElementById('github_repo').value=d.github_repo||'';
+document.getElementById('github_owner').value=d.github_owner||'GeckoZA';document.getElementById('github_repo').value=d.github_repo||'ElementIQ';
 document.getElementById('ota_auto').checked=!!d.ota_auto;document.getElementById('clock').textContent=d.time||'--:--';
 applyTheme(Number(d.theme||0))}
 async function saveGh(){if(!await saveSettings({
@@ -463,10 +571,12 @@ void setupWebUI() {
     } else req->send(404);
   });
   server.on("/connections", HTTP_GET, [](AsyncWebServerRequest *req) { sendPage(req, "connections", CONNECTIONS_BODY); });
-  server.on("/time", HTTP_GET, [](AsyncWebServerRequest *req) { sendPage(req, "time", TIME_BODY); });
-  server.on("/temperature", HTTP_GET, [](AsyncWebServerRequest *req) { sendPage(req, "temperature", TEMP_BODY); });
+  server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *req) { sendPage(req, "settings", SETTINGS_BODY); });
   server.on("/schedule", HTTP_GET, [](AsyncWebServerRequest *req) { sendPage(req, "schedule", SCHEDULE_BODY); });
-  server.on("/stats", HTTP_GET, [](AsyncWebServerRequest *req) { sendPage(req, "stats", STATS_BODY); });
   server.on("/update", HTTP_GET, [](AsyncWebServerRequest *req) { sendPage(req, "update", UPDATE_BODY); });
+  // Legacy redirects
+  server.on("/time", HTTP_GET, [](AsyncWebServerRequest *req) { req->redirect("/settings"); });
+  server.on("/temperature", HTTP_GET, [](AsyncWebServerRequest *req) { req->redirect("/settings"); });
+  server.on("/stats", HTTP_GET, [](AsyncWebServerRequest *req) { req->redirect("/"); });
 }
 

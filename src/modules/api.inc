@@ -88,10 +88,36 @@ bool applySettingsJson(JsonDocument& doc) {
     if (isfinite(v)) boostMinTemp = clampF(v, 0.0f, MAX_SETPOINT);
   }
   if (!doc["schedule_enabled"].isNull()) scheduleEnabled = doc["schedule_enabled"].as<bool>();
-  if (!doc["sched_on_h"].isNull()) scheduleOnH = constrain(doc["sched_on_h"].as<int>(), 0, 23);
-  if (!doc["sched_on_m"].isNull()) scheduleOnM = constrain(doc["sched_on_m"].as<int>(), 0, 59);
-  if (!doc["sched_off_h"].isNull()) scheduleOffH = constrain(doc["sched_off_h"].as<int>(), 0, 23);
-  if (!doc["sched_off_m"].isNull()) scheduleOffM = constrain(doc["sched_off_m"].as<int>(), 0, 59);
+  if (doc["schedule"].is<JsonArray>()) {
+    JsonArray arr = doc["schedule"].as<JsonArray>();
+    // Clear all slots first
+    for (int d = 0; d < 7; d++)
+      for (int s = 0; s < 3; s++) daySchedule[d][s] = {0, 0, 0, 0, 0};
+    for (int i = 0; i < (int)arr.size(); i++) {
+      JsonObject o = arr[i].as<JsonObject>();
+      if (o.isNull()) continue;
+      int day = o["day"].isNull() ? i : o["day"].as<int>();
+      if (day < 0 || day > 6) continue;
+      int slot = 0;
+      while (slot < 3 && daySchedule[day][slot].enabled) slot++;
+      if (slot >= 3) continue;
+      daySchedule[day][slot].enabled = o["enabled"].isNull() ? 1 : (o["enabled"].as<bool>() ? 1 : 0);
+      if (!o["on"].isNull()) {
+        const char* s = o["on"]; int h=0,m=0;
+        if (s && sscanf(s, "%d:%d", &h, &m) == 2) {
+          daySchedule[day][slot].on_h = constrain(h, 0, 23);
+          daySchedule[day][slot].on_m = constrain(m, 0, 59);
+        }
+      }
+      if (!o["off"].isNull()) {
+        const char* s = o["off"]; int h=0,m=0;
+        if (s && sscanf(s, "%d:%d", &h, &m) == 2) {
+          daySchedule[day][slot].off_h = constrain(h, 0, 23);
+          daySchedule[day][slot].off_m = constrain(m, 0, 59);
+        }
+      }
+    }
+  }
   copyStr(githubOwner, sizeof(githubOwner), doc["github_owner"]);
   copyStr(githubRepo, sizeof(githubRepo), doc["github_repo"]);
   if (!doc["ota_auto"].isNull()) otaAutoCheck = doc["ota_auto"].as<bool>();
@@ -131,9 +157,28 @@ void setupAPI() {
     doc["action"] = heaterOn ? "heating" : "idle";
     doc["sensor_fault"] = sensorFault;
     doc["schedule_enabled"] = scheduleEnabled;
-    doc["sched_on_h"] = scheduleOnH; doc["sched_on_m"] = scheduleOnM;
-    doc["sched_off_h"] = scheduleOffH; doc["sched_off_m"] = scheduleOffM;
     doc["schedule_active"] = scheduleEnabled && scheduleAllowsHeat();
+    {
+      JsonArray arr = doc["schedule"].to<JsonArray>();
+      static const char* dayNames[] = {"Mon","Tue","Wed","Thu","Fri","Sat","Sun"};
+      for (int d = 0; d < 7; d++) {
+        for (int s = 0; s < 3; s++) {
+          if (!daySchedule[d][s].enabled && s > 0) continue;
+          // always emit slot 0 so UI has a row; extra slots only if enabled
+          if (s > 0 && !daySchedule[d][s].enabled) continue;
+          JsonObject o = arr.add<JsonObject>();
+          o["day"] = d;
+          o["day_name"] = dayNames[d];
+          o["slot"] = s;
+          o["enabled"] = daySchedule[d][s].enabled != 0;
+          char onBuf[8], offBuf[8];
+          snprintf(onBuf, sizeof(onBuf), "%02u:%02u", daySchedule[d][s].on_h, daySchedule[d][s].on_m);
+          snprintf(offBuf, sizeof(offBuf), "%02u:%02u", daySchedule[d][s].off_h, daySchedule[d][s].off_m);
+          o["on"] = onBuf;
+          o["off"] = offBuf;
+        }
+      }
+    }
     doc["runtime_total_sec"] = runtimeTotalSec;
     doc["runtime_today_sec"] = runtimeTodaySec;
     doc["runtime_week_sec"] = runtimeWeekSec;

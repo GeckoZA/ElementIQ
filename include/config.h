@@ -69,6 +69,6 @@
 #define HA_DISCOVERY_PREFIX "homeassistant"
 #define HTTP_PORT           80
 #define FIRMWARE_VERSION    "v1.0.1"
-#define GITHUB_OWNER        ""
-#define GITHUB_REPO         ""
+#define GITHUB_OWNER        "GeckoZA"
+#define GITHUB_REPO         "ElementIQ"
 #define GITHUB_ASSET_NAME   "firmware.bin"
