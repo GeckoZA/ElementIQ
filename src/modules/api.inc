@@ -118,8 +118,7 @@ bool applySettingsJson(JsonDocument& doc) {
       }
     }
   }
-  copyStr(githubOwner, sizeof(githubOwner), doc["github_owner"]);
-  copyStr(githubRepo, sizeof(githubRepo), doc["github_repo"]);
+  // GitHub owner/repo are fixed in config.h (not user-editable)
   if (!doc["ota_auto"].isNull()) otaAutoCheck = doc["ota_auto"].as<bool>();
   if (!doc["preset"].isNull()) {
     const char* p = doc["preset"].as<const char*>();
@@ -315,6 +314,63 @@ void setupAPI() {
     }
     req->send(202, "application/json", "{\"queued\":true}");
   });
+  // Browser firmware upload: POST raw .bin body to /api/ota/upload
+  server.on(
+    "/api/ota/upload", HTTP_POST,
+    [](AsyncWebServerRequest *req) {
+      bool ok = !Update.hasError();
+      {
+        StateGuard guard;
+        otaBusy = false;
+        otaInProgress = false;
+        lastOtaMsg = ok ? "Web upload OK — rebooting"
+                        : String("Web upload failed: ") + Update.errorString();
+      }
+      if (ok) {
+        req->send(200, "text/plain", "OK");
+        delay(500);
+        ESP.restart();
+      } else {
+        req->send(500, "text/plain", Update.errorString());
+      }
+    },
+    nullptr,
+    [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
+      if (index == 0) {
+        {
+          StateGuard guard;
+          if (otaBusy) return;
+          otaBusy = true;
+          otaInProgress = true;
+          lastOtaMsg = "Web upload in progress...";
+          setHeater(false, true);
+        }
+        Serial.printf("[OTA] Web upload start, %u bytes\n", (unsigned)total);
+        if (!Update.begin(total > 0 ? total : UPDATE_SIZE_UNKNOWN)) {
+          StateGuard guard;
+          lastOtaMsg = String("Update.begin failed: ") + Update.errorString();
+          otaBusy = false;
+          otaInProgress = false;
+          Serial.println(lastOtaMsg);
+        }
+      }
+      if (Update.hasError()) return;
+      if (len && Update.write(data, len) != len) {
+        StateGuard guard;
+        lastOtaMsg = String("Write failed: ") + Update.errorString();
+        Serial.println(lastOtaMsg);
+      }
+      if (!Update.hasError() && total > 0 && index + len >= total) {
+        if (!Update.end(true)) {
+          StateGuard guard;
+          lastOtaMsg = String("Update.end failed: ") + Update.errorString();
+          Serial.println(lastOtaMsg);
+        } else {
+          Serial.println("[OTA] Web upload image OK");
+        }
+      }
+    });
+
   server.on("/api/factoryreset", HTTP_POST, [](AsyncWebServerRequest *req) {
     {
       StateGuard guard;

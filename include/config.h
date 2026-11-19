@@ -5,7 +5,7 @@
 // ============================================================
 #define RELAY_PIN           7
 #define I2C_SDA             4
-#define I2C_SCL             5
+#define I2C_SCL             6
 #define LED_PIN             8     // Common onboard LED / RGB data (active LOW on many boards)
 #define FACTORY_RESET_PIN   9     // BOOT button (hold LOW at boot ~5s to factory reset)
 
@@ -13,7 +13,7 @@
 //  Thermistor (raw Steinhart–Hart, then calibration table)
 // ============================================================
 #define FIXED_RESISTOR      10980.0f
-#define NTC_R25             9380.0f
+#define NTC_R25             10000.0f
 #define NTC_BETA            3950.0f
 #define VCC                 3.3f
 
@@ -68,7 +68,7 @@
 #define MQTT_BASE_TOPIC     "elementiq"
 #define HA_DISCOVERY_PREFIX "homeassistant"
 #define HTTP_PORT           80
-#define FIRMWARE_VERSION    "v1.0.1"
+#define FIRMWARE_VERSION    "v1.0.2"
 #define GITHUB_OWNER        "GeckoZA"
 #define GITHUB_REPO         "ElementIQ"
 #define GITHUB_ASSET_NAME   "firmware.bin"

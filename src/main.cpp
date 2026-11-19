@@ -22,6 +22,7 @@
 #include <ArduinoOTA.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
+#include <Update.h>
 #include <WiFiClientSecure.h>
 #include <new>
 #include "config.h"
@@ -51,12 +52,14 @@ void setup() {
   checkFactoryResetPin();
 
   if (!LittleFS.begin(true)) Serial.println("[FS] mount/format failed");
+  Serial.printf("[I2C] Wire.begin SDA=%d SCL=%d\n", I2C_SDA, I2C_SCL);
   Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(100000);  // 100 kHz — more reliable with longer probe leads
   adsReady = initializeAds();
   if (adsReady) {
-    Serial.println("[ADS] ok");
+    Serial.println("[ADS] ready — NTC on A0, expect divider 3V3-NTC-A0-Rfixed-GND");
   } else {
-    Serial.println("[ADS] init failed; heater remains locked out until sensor reads valid");
+    Serial.println("[ADS] init failed; heater locked out until sensor recovers");
   }
 
   deviceId = String((uint32_t)(ESP.getEfuseMac() >> 24), HEX);

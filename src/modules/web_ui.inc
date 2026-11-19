@@ -61,13 +61,20 @@ button.danger{background:#b91c1c}
 .dial-svg{width:100%;height:100%}
 .dial-track{fill:none;stroke:var(--track);stroke-width:16}
 .dial-progress{fill:none;stroke:var(--primary);stroke-width:16;stroke-linecap:round}
-.dial-progress.heating{stroke:var(--accent)}.dial-progress.boost{stroke:var(--accent-hot)}
+.dial-progress.heating,.dial-progress.boost{filter:brightness(1.08)}
 .dial-center{position:absolute;inset:44px;border-radius:50%;background:var(--row);display:flex;flex-direction:column;align-items:center;justify-content:center}
 .dial-temp{font-size:2.6rem;font-weight:700;line-height:1}
 .dial-unit{font-size:.85rem;color:var(--muted)}
 .dial-target{font-size:.8rem;color:var(--primary);margin-top:8px;font-weight:600}
 .dial-action{font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin-top:4px;color:var(--muted)}
 .dial-action.heating{color:var(--accent)}.dial-action.boost{color:var(--accent-hot)}
+.gauge-row{display:flex;align-items:center;gap:12px;justify-content:center;margin:4px 0 8px}
+.temp-bar-wrap{display:flex;flex-direction:column;align-items:center;gap:4px;height:220px;flex-shrink:0}
+.temp-bar-track{position:relative;width:14px;flex:1;border-radius:8px;background:var(--track);overflow:hidden;border:1px solid var(--card-border)}
+.temp-bar-fill{position:absolute;left:0;right:0;bottom:0;border-radius:8px;transition:height .35s ease,background .35s ease;height:0;background:#3b82f6}
+.temp-bar-scale{display:flex;flex-direction:column;justify-content:space-between;height:100%;font-size:.55rem;color:var(--muted);padding:2px 0;margin-left:2px}
+.temp-bar-outer{display:flex;align-items:stretch;gap:4px;height:220px}
+.dial-wrap{position:relative;width:min(260px,70vw);aspect-ratio:1;margin:0 auto}
 .modes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
 .presets{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .mode-btn,.preset-btn{background:var(--row);border:1px solid var(--card-border);color:var(--muted);border-radius:10px;padding:10px 4px;font-size:.72rem;font-weight:700;text-transform:uppercase;cursor:pointer}
@@ -193,15 +200,23 @@ String navHtml(const char* active) {
 const char INDEX_BODY[] PROGMEM = R"rawliteral(
 <div class="card">
   <div id="fault" style="display:none" class="hint"><span class="badge">SENSOR FAULT</span> Heater locked off</div>
-  <div class="dial-wrap" id="dial">
-    <svg class="dial-svg" viewBox="0 0 260 260">
-      <circle class="dial-track" cx="130" cy="130" r="105" stroke-dasharray="494" transform="rotate(135 130 130)"/>
-      <circle class="dial-progress" id="arc" cx="130" cy="130" r="105" stroke-dasharray="494" stroke-dashoffset="494" transform="rotate(135 130 130)"/>
-    </svg>
-    <div class="dial-center">
-      <div class="dial-temp" id="temp">--.-</div><div class="dial-unit">C</div>
-      <div class="dial-target" id="target">Set 55.0</div>
-      <div class="dial-action" id="action">idle</div>
+  <div class="gauge-row">
+    <div class="temp-bar-outer">
+      <div class="temp-bar-wrap">
+        <div class="temp-bar-track"><div class="temp-bar-fill" id="tempBar"></div></div>
+      </div>
+      <div class="temp-bar-scale"><span>80</span><span>60</span><span>40</span><span>20</span></div>
+    </div>
+    <div class="dial-wrap" id="dial">
+      <svg class="dial-svg" viewBox="0 0 260 260">
+        <circle class="dial-track" id="arcTrack" cx="130" cy="130" r="105" fill="none" stroke-width="16" transform="rotate(135 130 130)"/>
+        <circle class="dial-progress" id="arc" cx="130" cy="130" r="105" fill="none" stroke-width="16" transform="rotate(135 130 130)"/>
+      </svg>
+      <div class="dial-center">
+        <div class="dial-temp" id="temp">--.-</div><div class="dial-unit">C</div>
+        <div class="dial-target" id="target">Set 55.0</div>
+        <div class="dial-action" id="action">idle</div>
+      </div>
     </div>
   </div>
   <div class="modes">
@@ -228,14 +243,76 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
 </div>
 <div class="footer"><div id="clock">--:--</div><div id="info"></div></div>
 <script>
-const MIN=30,MAX=100,SPAN=MAX-MIN,CIRC=494.8;let setpoint=55,dragging=false;
-const arc=document.getElementById('arc'),dial=document.getElementById('dial');
-function tempToOffset(t){return CIRC*(1-Math.max(0,Math.min(1,(t-MIN)/SPAN))*0.75)}
-function setArc(t,h,b){arc.style.strokeDashoffset=tempToOffset(t);arc.className='dial-progress'+(b?' boost':h?' heating':'')}
-function angleFromEvent(e){const r=dial.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,pt=e.touches?e.touches[0]:e;let a=Math.atan2(pt.clientY-cy,pt.clientX-cx)*180/Math.PI;a=(a+360+135)%360;if(a>270)a=a>315?0:270;return a}
+const SET_MIN=40,SET_MAX=80,SET_SPAN=SET_MAX-SET_MIN;
+const BAR_MIN=20,BAR_MAX=80;
+const R=105,C_FULL=2*Math.PI*R,ARC_DEG=270,ARC_LEN=C_FULL*(ARC_DEG/360);
+let setpoint=55,dragging=false,pendingSet=55;
+const arc=document.getElementById('arc'),arcTrack=document.getElementById('arcTrack'),dial=document.getElementById('dial');
+arcTrack.setAttribute('stroke-dasharray',ARC_LEN+' '+C_FULL);
+arc.setAttribute('stroke-dasharray',ARC_LEN+' '+C_FULL);
+arc.style.strokeDashoffset=String(ARC_LEN);
+function tempColor(t){
+  if(t==null||isNaN(t))return 'var(--muted)';
+  const u=Math.max(0,Math.min(1,(Number(t)-35)/(60-35)));
+  const r=Math.round(59+u*(239-59)),g=Math.round(130+u*(68-130)),b=Math.round(246+u*(68-246));
+  return 'rgb('+r+','+g+','+b+')';
+}
+function clampSet(t){return Math.max(SET_MIN,Math.min(SET_MAX,Math.round(Number(t)*2)/2))}
+function tempToOffset(t){
+  const f=Math.max(0,Math.min(1,(clampSet(t)-SET_MIN)/SET_SPAN));
+  return ARC_LEN*(1-f);
+}
+function setArc(t,h,b){
+  arc.style.strokeDashoffset=String(tempToOffset(t));
+  arc.style.stroke=tempColor(t);
+  arc.className='dial-progress'+(b?' boost':h?' heating':'');
+}
+function setTempBar(t){
+  const bar=document.getElementById('tempBar');
+  if(t==null||isNaN(t)){bar.style.height='0%';return}
+  const f=Math.max(0,Math.min(1,(Number(t)-BAR_MIN)/(BAR_MAX-BAR_MIN)));
+  bar.style.height=(f*100).toFixed(1)+'%';
+  bar.style.background=tempColor(t);
+}
+function applyTempColors(t,setT){
+  document.getElementById('temp').style.color=tempColor(t);
+  document.getElementById('target').style.color=tempColor(setT);
+}
+function angleFromEvent(e){
+  const r=dial.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,pt=e.touches?e.touches[0]:e;
+  let a=Math.atan2(pt.clientY-cy,pt.clientX-cx)*180/Math.PI;
+  // Map so 0 = start of 270° arc (after rotate 135), 270 = end
+  a=(a+360+135)%360;
+  if(a>270)a=a>315?0:270;
+  return Math.max(0,Math.min(270,a));
+}
 function onStart(e){dragging=true;onMove(e);e.preventDefault()}
-function onMove(e){if(!dragging)return;const a=angleFromEvent(e);setpoint=Math.round((MIN+(a/270)*SPAN)*2)/2;document.getElementById('target').textContent='Set '+setpoint.toFixed(1);setArc(setpoint,false,false);e.preventDefault()}
-function onEnd(){if(!dragging)return;dragging=false;fetch('/api/setpoint',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({setpoint})})}
+function onMove(e){
+  if(!dragging)return;
+  const a=angleFromEvent(e);
+  pendingSet=clampSet(SET_MIN+(a/270)*SET_SPAN);
+  document.getElementById('target').textContent='Set '+pendingSet.toFixed(1);
+  applyTempColors(null,pendingSet);
+  document.getElementById('target').style.color=tempColor(pendingSet);
+  setArc(pendingSet,false,false);
+  e.preventDefault();
+}
+async function onEnd(){
+  if(!dragging)return;
+  dragging=false;
+  let next=clampSet(pendingSet);
+  if(next>60){
+    if(!confirm('Set temperature to '+next.toFixed(1)+'°C?\n\nValues above 60°C can be very hot. Confirm to continue.')){
+      update();
+      return;
+    }
+  }
+  setpoint=next;
+  try{
+    await fetch('/api/setpoint',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({setpoint})});
+  }catch(err){}
+  update();
+}
 dial.addEventListener('mousedown',onStart);dial.addEventListener('touchstart',onStart,{passive:false});
 window.addEventListener('mousemove',onMove);window.addEventListener('touchmove',onMove,{passive:false});
 window.addEventListener('mouseup',onEnd);window.addEventListener('touchend',onEnd);
@@ -245,10 +322,13 @@ async function update(){try{
   const d=await(await fetch('/api/status')).json();
   const t=d.temperature!=null?Number(d.temperature):null;
   document.getElementById('temp').textContent=t!=null?t.toFixed(1):'--.-';
-  setpoint=Number(d.setpoint);const tgt=d.mode==='boost'?Number(d.boost_temp):setpoint;
-  document.getElementById('target').textContent=(d.mode==='boost'?'Boost ':'Set ')+tgt.toFixed(1);
+  setpoint=Number(d.setpoint);pendingSet=setpoint;
+  const tgt=d.mode==='boost'?Number(d.boost_temp):setpoint;
+  document.getElementById('target').textContent=(d.mode==='boost'?'Boost ':'Set ')+Number(tgt).toFixed(1);
   const act=document.getElementById('action');act.textContent=d.mode==='boost'?'boost':(d.heater?'heating':'idle');
   act.className='dial-action'+(d.mode==='boost'?' boost':d.heater?' heating':'');
+  setTempBar(t);
+  applyTempColors(t,tgt);
   if(!dragging)setArc(tgt,d.heater,d.mode==='boost');
   document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===d.mode));
   document.querySelectorAll('.preset-btn').forEach(b=>b.classList.toggle('active',b.dataset.p===d.preset));
@@ -351,17 +431,131 @@ load();
 )rawliteral";
 
 const char SCHEDULE_BODY[] PROGMEM = R"rawliteral(
-<div class="card"><h1>Schedule</h1>
-<label class="row">Enable schedule <input type="checkbox" id="schedule_enabled"></label>
-<div class="hint">Auto heats only inside a day's windows (24h). Boost always works. Up to 3 windows per day.</div>
+<div class="card" style="padding-bottom:88px"><h1>Schedule</h1>
+<label class="row">Enable schedule <input type="checkbox" id="schedule_enabled" onchange="markDirty()"></label>
+<div class="hint">Auto heats only inside a day's windows. Overnight OK (e.g. 22:00→06:00). Boost always works. Up to 3 windows per day.</div>
+<p class="hint" id="status" style="margin-top:8px"></p>
+
+<div class="sec-title">Quick templates</div>
+<div class="list" style="margin-bottom:8px">
+  <div class="row-static" style="flex-wrap:wrap;gap:8px">
+    <button type="button" class="save" style="width:auto;margin:0;padding:8px 12px" onclick="applyTemplate('weekdays')">Weekdays</button>
+    <button type="button" class="save" style="width:auto;margin:0;padding:8px 12px" onclick="applyTemplate('weekend')">Weekend</button>
+    <button type="button" class="save" style="width:auto;margin:0;padding:8px 12px" onclick="applyTemplate('everyday')">Every day</button>
+  </div>
+</div>
+<div class="hint" style="margin-top:0">Templates use 05:00–22:00 on the selected days (replaces those days' windows).</div>
+
+<div class="sec-title">Copy day</div>
+<div class="list" style="margin-bottom:8px">
+  <div class="row-static" style="flex-wrap:wrap;gap:8px;align-items:center">
+    <select id="copy_from" style="width:auto;min-width:100px"></select>
+    <span class="hint" style="margin:0">to</span>
+    <select id="copy_to" style="width:auto;min-width:120px">
+      <option value="weekdays">Weekdays (Mon–Fri)</option>
+      <option value="weekend">Weekend (Sat–Sun)</option>
+      <option value="all">Every day</option>
+      <option value="0">Monday</option>
+      <option value="1">Tuesday</option>
+      <option value="2">Wednesday</option>
+      <option value="3">Thursday</option>
+      <option value="4">Friday</option>
+      <option value="5">Saturday</option>
+      <option value="6">Sunday</option>
+    </select>
+    <button type="button" class="save" style="width:auto;margin:0;padding:8px 12px" onclick="copyDay()">Copy</button>
+  </div>
+</div>
+
 <div id="days"></div>
-<button class="save" onclick="save()">Save</button>
-<div class="hint" id="status" style="margin-top:12px"></div>
-</div><div class="footer"><div id="clock">--:--</div></div>
+</div>
+
+<div id="stickySave" class="sticky-save" hidden>
+  <span id="dirtyHint">Unsaved changes</span>
+  <button type="button" class="save" style="width:auto;margin:0;padding:10px 18px" onclick="save()">Save</button>
+</div>
+
+<div class="footer"><div id="clock">--:--</div></div>
+<style>
+.sticky-save{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:12px 16px;padding-bottom:calc(12px + env(safe-area-inset-bottom,0px));
+  background:rgba(10,22,40,.94);border-top:1px solid var(--card-border);backdrop-filter:blur(8px);
+  max-width:100%;box-sizing:border-box}
+body.theme-light .sticky-save{background:rgba(255,255,255,.96)}
+body.theme-dark .sticky-save{background:rgba(22,22,22,.96)}
+.sticky-save[hidden]{display:none!important}
+.sticky-save #dirtyHint{font-size:.85rem;color:var(--accent);font-weight:600}
+@media(min-width:801px){
+  .sticky-save{left:220px}
+}
+</style>
 <script>
 const DAY_NAMES=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 let entries=[];
+let savedSnapshot='';
+let dirty=false;
+
 function emptyDay(d){return {day:d,enabled:true,on:'05:00',off:'22:00'}}
+function normEntries(list){
+  return (list||[]).map(e=>({
+    day:Number(e.day),
+    enabled:!!e.enabled,
+    on:e.on||'05:00',
+    off:e.off||'22:00'
+  })).sort((a,b)=>a.day-b.day||String(a.on).localeCompare(String(b.on)));
+}
+function snapshotOf(en,schedOn){
+  return JSON.stringify({on:!!schedOn,entries:normEntries(en)});
+}
+function markDirty(){
+  const on=document.getElementById('schedule_enabled').checked;
+  dirty=snapshotOf(entries,on)!==savedSnapshot;
+  const bar=document.getElementById('stickySave');
+  if(dirty) bar.removeAttribute('hidden'); else bar.setAttribute('hidden','');
+}
+function setClean(){
+  savedSnapshot=snapshotOf(entries,document.getElementById('schedule_enabled').checked);
+  dirty=false;
+  document.getElementById('stickySave').setAttribute('hidden','');
+}
+
+function fillCopyFrom(){
+  const sel=document.getElementById('copy_from');
+  sel.innerHTML=DAY_NAMES.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
+}
+
+function windowsForDay(d){
+  return entries.filter(e=>e.day===d).map(e=>({enabled:e.enabled,on:e.on,off:e.off}));
+}
+function replaceDays(dayList, windows){
+  entries=entries.filter(e=>!dayList.includes(e.day));
+  dayList.forEach(d=>{
+    (windows.length?windows:[]).slice(0,3).forEach(w=>{
+      entries.push({day:d,enabled:!!w.enabled,on:w.on||'05:00',off:w.off||'22:00'});
+    });
+  });
+  render();markDirty();
+}
+function applyTemplate(kind){
+  const win=[{enabled:true,on:'05:00',off:'22:00'}];
+  if(kind==='weekdays') replaceDays([0,1,2,3,4], win);
+  else if(kind==='weekend') replaceDays([5,6], win);
+  else if(kind==='everyday') replaceDays([0,1,2,3,4,5,6], win);
+}
+function copyDay(){
+  const from=Number(document.getElementById('copy_from').value);
+  const to=document.getElementById('copy_to').value;
+  const wins=windowsForDay(from);
+  if(!wins.length){alert('Source day has no windows to copy');return}
+  let days=[];
+  if(to==='weekdays') days=[0,1,2,3,4];
+  else if(to==='weekend') days=[5,6];
+  else if(to==='all') days=[0,1,2,3,4,5,6];
+  else days=[Number(to)];
+  // Don't leave source empty when copying to a set that includes source — still replace targets
+  replaceDays(days, wins);
+}
+
 function render(){
   const box=document.getElementById('days');box.innerHTML='';
   for(let d=0;d<7;d++){
@@ -371,13 +565,15 @@ function render(){
       html+=`<div class="row-static"><div class="row-meta"><strong>No windows</strong><small>Heating blocked if schedule on</small></div>
         <button type="button" class="save" style="width:auto;margin:0;padding:8px 12px" onclick="addEntry(${d})">Add</button></div>`;
     } else {
-      dayEntries.forEach((e,i)=>{
+      dayEntries.forEach((e)=>{
         const idx=entries.indexOf(e);
+        const overnight=(e.off||'')<(e.on||'');
         html+=`<div class="row-static" style="flex-wrap:wrap">
-          <label class="row" style="margin:0;gap:8px"><input type="checkbox" ${e.enabled?'checked':''} onchange="entries[${idx}].enabled=this.checked"> On</label>
-          <input type="time" value="${e.on||'05:00'}" onchange="entries[${idx}].on=this.value" style="width:auto">
+          <label class="row" style="margin:0;gap:8px"><input type="checkbox" ${e.enabled?'checked':''} onchange="entries[${idx}].enabled=this.checked;markDirty()"> On</label>
+          <input type="time" value="${e.on||'05:00'}" onchange="entries[${idx}].on=this.value;markDirty()" style="width:auto">
           <span class="hint" style="margin:0">to</span>
-          <input type="time" value="${e.off||'22:00'}" onchange="entries[${idx}].off=this.value" style="width:auto">
+          <input type="time" value="${e.off||'22:00'}" onchange="entries[${idx}].off=this.value;markDirty()" style="width:auto">
+          ${overnight?'<span class="hint" style="margin:0;color:var(--accent)">overnight</span>':''}
           <button type="button" style="margin-left:auto;background:none;border:none;color:#f87171;cursor:pointer;font-size:1.1rem" onclick="removeEntry(${idx})" title="Remove">✕</button>
         </div>`;
       });
@@ -391,25 +587,34 @@ function render(){
 }
 function addEntry(d){
   if(entries.filter(e=>e.day===d).length>=3)return;
-  entries.push(emptyDay(d));render();
+  entries.push(emptyDay(d));render();markDirty();
 }
-function removeEntry(i){entries.splice(i,1);render()}
+function removeEntry(i){entries.splice(i,1);render();markDirty()}
+
 async function load(){
   const d=await(await fetch('/api/status')).json();
   document.getElementById('schedule_enabled').checked=!!d.schedule_enabled;
-  entries=(d.schedule||[]).map(e=>({day:Number(e.day),enabled:!!e.enabled,on:e.on||'05:00',off:e.off||'22:00'}));
-  // ensure each day visible even if empty
+  entries=normEntries(d.schedule||[]);
+  fillCopyFrom();
   render();
+  setClean();
   document.getElementById('status').textContent=d.schedule_enabled?(d.schedule_active?'Currently IN heating window':'Currently OUTSIDE heating window'):'Schedule off';
   document.getElementById('clock').textContent=d.time||'--:--';applyTheme(Number(d.theme||0));
 }
 async function save(){
   if(!await saveSettings({schedule_enabled:document.getElementById('schedule_enabled').checked,schedule:entries}))return;
-  alert('Saved');load();
-}
-load();setInterval(async()=>{const d=await(await fetch('/api/status')).json();
+  setClean();
+  document.getElementById('dirtyHint').textContent='Saved';
+  document.getElementById('stickySave').removeAttribute('hidden');
+  setTimeout(()=>{if(!dirty)document.getElementById('stickySave').setAttribute('hidden','');document.getElementById('dirtyHint').textContent='Unsaved changes';},1200);
+  const d=await(await fetch('/api/status')).json();
   document.getElementById('status').textContent=d.schedule_enabled?(d.schedule_active?'Currently IN heating window':'Currently OUTSIDE heating window'):'Schedule off';
-  document.getElementById('clock').textContent=d.time||'--:--';},15000);
+}
+load();setInterval(async()=>{
+  const d=await(await fetch('/api/status')).json();
+  document.getElementById('status').textContent=d.schedule_enabled?(d.schedule_active?'Currently IN heating window':'Currently OUTSIDE heating window'):'Schedule off';
+  document.getElementById('clock').textContent=d.time||'--:--';
+},15000);
 </script>
 </div><!--content-->
 </div><!--main-->
@@ -510,14 +715,27 @@ const char UPDATE_BODY[] PROGMEM = R"rawliteral(
 <div class="card"><h1>Update & reset</h1>
 <p class="hint">Version: <strong id="ver">-</strong></p>
 <p class="hint" id="ota_msg">-</p>
-<p class="hint">Project: <a href="https://github.com/GeckoZA/ElementIQ" style="color:var(--primary)">github.com/GeckoZA/ElementIQ</a></p>
-<label>GitHub owner</label><input type="text" id="github_owner" placeholder="GeckoZA">
-<label>GitHub repo</label><input type="text" id="github_repo" placeholder="ElementIQ">
+
+<section style="margin-top:8px">
+<h3 style="font-size:.8rem;color:var(--muted)">Upload firmware</h3>
+<label>Firmware file (.bin)</label>
+<input type="file" id="fwfile" accept=".bin,application/octet-stream">
+<button class="save" style="background:#0d9488" onclick="uploadFw()">Upload &amp; install</button>
+<p class="hint" id="upload_msg">Use a PlatformIO <code>firmware.bin</code> built for this board.</p>
+</section>
+
+<hr style="border:none;border-top:1px solid var(--track);margin:20px 0">
+
+<section>
+<h3 style="font-size:.8rem;color:var(--muted)">GitHub release</h3>
+<p class="hint">Updates from <a href="https://github.com/GeckoZA/ElementIQ" style="color:var(--primary)">github.com/GeckoZA/ElementIQ</a></p>
 <div class="hint">Latest release must include asset <code>firmware.bin</code></div>
 <label class="row">Auto-check on boot <input type="checkbox" id="ota_auto"></label>
-<button class="save" onclick="saveGh()">Save GitHub</button>
+<button class="save" onclick="saveOta()">Save</button>
 <button class="save" style="background:#0d9488" onclick="check()">Check update</button>
 <button class="save danger" onclick="install()">Install update</button>
+</section>
+
 <hr style="border:none;border-top:1px solid var(--track);margin:20px 0">
 <button class="save danger" onclick="factory()">Factory reset</button>
 <div class="hint">Clears all settings + WiFi. Or hold BOOT (GPIO9) for 5s at boot.</div>
@@ -526,12 +744,9 @@ const char UPDATE_BODY[] PROGMEM = R"rawliteral(
 <script>
 async function load(){const d=await(await fetch('/api/status')).json();
 document.getElementById('ver').textContent=d.version;document.getElementById('ota_msg').textContent=d.ota_msg||'Idle';
-document.getElementById('github_owner').value=d.github_owner||'GeckoZA';document.getElementById('github_repo').value=d.github_repo||'ElementIQ';
 document.getElementById('ota_auto').checked=!!d.ota_auto;document.getElementById('clock').textContent=d.time||'--:--';
 applyTheme(Number(d.theme||0))}
-async function saveGh(){if(!await saveSettings({
-github_owner:document.getElementById('github_owner').value,github_repo:document.getElementById('github_repo').value,
-ota_auto:document.getElementById('ota_auto').checked}))return;alert('Saved');load()}
+async function saveOta(){if(!await saveSettings({ota_auto:document.getElementById('ota_auto').checked}))return;alert('Saved');load()}
 async function watchOta(){const d=await(await fetch('/api/status')).json();
 document.getElementById('ota_msg').textContent=d.ota_msg||'Idle';
 if(d.ota_busy)setTimeout(watchOta,1500)}
@@ -541,6 +756,21 @@ document.getElementById('ota_msg').textContent='Check queued';watchOta()}
 async function install(){if(!confirm('Install from GitHub and reboot?'))return;
 document.getElementById('ota_msg').textContent='Installing...';const r=await fetch('/api/ota/install',{method:'POST'});
 if(!r.ok){const d=await r.json();document.getElementById('ota_msg').textContent=d.error||'Could not queue install';return}watchOta()}
+async function uploadFw(){
+  const f=document.getElementById('fwfile').files[0];
+  if(!f){alert('Choose a .bin file first');return}
+  if(!confirm('Flash '+f.name+' ('+Math.round(f.size/1024)+' KB) and reboot?'))return;
+  const msg=document.getElementById('upload_msg');
+  msg.textContent='Uploading '+f.name+'...';
+  document.getElementById('ota_msg').textContent='Web upload in progress...';
+  try{
+    const r=await fetch('/api/ota/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f});
+    const t=await r.text();
+    if(!r.ok){msg.textContent='Failed: '+t;document.getElementById('ota_msg').textContent=t;return}
+    msg.textContent='OK — device rebooting';
+    document.getElementById('ota_msg').textContent='Web upload OK — rebooting';
+  }catch(e){msg.textContent='Upload error (device may be rebooting)';}
+}
 async function factory(){if(!confirm('FACTORY RESET all settings and WiFi?'))return;
 await fetch('/api/factoryreset',{method:'POST'})}
 load();

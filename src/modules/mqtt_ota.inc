@@ -252,16 +252,87 @@ void setupArduinoOTA() {
   ArduinoOTA.begin();
 }
 
+// Download a firmware image over HTTPS, following redirects (required for GitHub assets).
+// HTTPUpdate alone often returns "HTTP error: Wrong HTTP code" on GitHub 302 → CDN.
+bool installFirmwareFromUrl(const String& url, String& result) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(30);
+
+  HTTPClient http;
+  http.setTimeout(120000);
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  http.setReuse(false);
+  http.setUserAgent("ElementIQ");
+  // GitHub sometimes serves assets better with this accept header
+  http.addHeader("Accept", "application/octet-stream");
+
+  if (!http.begin(client, url)) {
+    result = "Firmware download begin failed";
+    return false;
+  }
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    result = String("Firmware download HTTP ") + code +
+             " (GitHub asset redirects must be followed)";
+    http.end();
+    return false;
+  }
+
+  int contentLen = http.getSize();
+  WiFiClient& stream = http.getStream();
+
+  if (!Update.begin(contentLen > 0 ? (size_t)contentLen : UPDATE_SIZE_UNKNOWN)) {
+    result = String("Update.begin failed: ") + Update.errorString();
+    http.end();
+    return false;
+  }
+
+  size_t written = Update.writeStream(stream);
+  if (contentLen > 0 && written != (size_t)contentLen) {
+    result = String("Incomplete write ") + written + "/" + contentLen;
+    Update.abort();
+    http.end();
+    return false;
+  }
+  if (written == 0) {
+    result = "No firmware data received";
+    Update.abort();
+    http.end();
+    return false;
+  }
+
+  if (!Update.end()) {
+    result = String("Update.end failed: ") + Update.errorString();
+    http.end();
+    return false;
+  }
+
+  http.end();
+  result = String("Installed ") + written + " bytes — rebooting";
+  return true;
+}
+
 bool checkGitHubUpdate(bool install, const char* owner, const char* repo, String& result) {
   if (!owner[0] || !repo[0]) { result = "GitHub owner/repo not set"; return false; }
   if (WiFi.status() != WL_CONNECTED) { result = "WiFi not connected"; return false; }
+
   String api = String("https://api.github.com/repos/") + owner + "/" + repo + "/releases/latest";
   WiFiClientSecure client;
   client.setInsecure();
-  HTTPClient http; http.setTimeout(15000); http.setUserAgent("ElementIQ");
+  client.setTimeout(20);
+
+  HTTPClient http;
+  http.setTimeout(20000);
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  http.setReuse(false);
+  http.setUserAgent("ElementIQ");
+  http.addHeader("Accept", "application/vnd.github+json");
+
   if (!http.begin(client, api)) { result = "HTTP begin failed"; return false; }
   int code = http.GET();
-  if (code != 200) {
+  if (code != HTTP_CODE_OK) {
     http.end();
     if (code == 404) {
       result = String("Repo/release not found: ") + owner + "/" + repo +
@@ -273,29 +344,41 @@ bool checkGitHubUpdate(bool install, const char* owner, const char* repo, String
     }
     return false;
   }
-  String body = http.getString(); http.end();
+  String body = http.getString();
+  http.end();
+
   JsonDocument doc;
   if (deserializeJson(doc, body)) { result = "JSON error"; return false; }
   const char* tag = doc["tag_name"];
   if (!tag) { result = "No tag"; return false; }
+
   String remoteVer = tag;
   if (remoteVer.startsWith("v") || remoteVer.startsWith("V")) remoteVer = remoteVer.substring(1);
   String localVer = FIRMWARE_VERSION;
   if (localVer.startsWith("v") || localVer.startsWith("V")) localVer = localVer.substring(1);
-  if (remoteVer == localVer) { result = String("Up to date (") + FIRMWARE_VERSION + ")"; return false; }
+  if (remoteVer == localVer) {
+    result = String("Up to date (") + FIRMWARE_VERSION + ")";
+    return false;
+  }
+
   String binUrl;
   for (JsonObject a : doc["assets"].as<JsonArray>()) {
     const char* name = a["name"];
-    if (name && String(name) == GITHUB_ASSET_NAME) { binUrl = a["browser_download_url"].as<String>(); break; }
+    if (name && String(name) == GITHUB_ASSET_NAME) {
+      binUrl = a["browser_download_url"].as<String>();
+      break;
+    }
   }
-  if (!binUrl.length()) { result = "No firmware.bin asset"; return false; }
+  if (!binUrl.length()) {
+    result = "No firmware.bin asset in latest release";
+    return false;
+  }
+
   result = String("Update available: ") + tag;
   if (!install) return true;
-  HTTPUpdate updater;
-  updater.rebootOnUpdate(true);
-  t_httpUpdate_return ret = updater.update(client, binUrl);
-  if (ret == HTTP_UPDATE_FAILED) result = updater.getLastErrorString();
-  return ret == HTTP_UPDATE_OK;
+
+  // Important: use a fresh TLS client for the asset download (do not reuse API client)
+  return installFirmwareFromUrl(binUrl, result);
 }
 
 enum OtaCommand : uint8_t { OTA_CHECK = 1, OTA_INSTALL = 2 };
@@ -313,12 +396,17 @@ void otaWorker(void*) {
       strlcpy(repo, githubRepo, sizeof(repo));
     }
     String message;
-    checkGitHubUpdate(command == OTA_INSTALL, owner, repo, message);
+    bool ok = checkGitHubUpdate(command == OTA_INSTALL, owner, repo, message);
     {
       StateGuard guard;
       lastOtaMsg = message;
       otaBusy = false;
       otaInProgress = false;
+    }
+    // Reboot only after a successful install (check-only must not reboot)
+    if (ok && command == OTA_INSTALL) {
+      delay(800);
+      ESP.restart();
     }
   }
 }

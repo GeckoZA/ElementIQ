@@ -230,8 +230,9 @@ void loadSettings() {
   if (s.hysteresis >= 0.5f && s.hysteresis <= 20.0f) hysteresis = s.hysteresis;
   if (s.min_on_ms >= 5000 && s.min_on_ms <= 600000) minOnMs = s.min_on_ms;
   if (s.min_off_ms >= 5000 && s.min_off_ms <= 600000) minOffMs = s.min_off_ms;
-  if (s.github_owner[0]) strncpy(githubOwner, s.github_owner, sizeof(githubOwner)-1);
-  if (s.github_repo[0]) strncpy(githubRepo, s.github_repo, sizeof(githubRepo)-1);
+  // Always use fixed repo from config.h
+  strncpy(githubOwner, GITHUB_OWNER, sizeof(githubOwner)-1); githubOwner[sizeof(githubOwner)-1]=0;
+  strncpy(githubRepo, GITHUB_REPO, sizeof(githubRepo)-1); githubRepo[sizeof(githubRepo)-1]=0;
   otaAutoCheck = s.ota_auto != 0;
   if (s.home_temp >= MIN_SETPOINT && s.home_temp <= MAX_SETPOINT) homeTemp = s.home_temp;
   if (s.away_temp >= MIN_SETPOINT && s.away_temp <= MAX_SETPOINT) awayTemp = s.away_temp;
@@ -405,35 +406,107 @@ float applyCalibration(float ntcC) {
   return CAL_TRUE[i] + t * (CAL_TRUE[i + 1] - CAL_TRUE[i]);
 }
 
-float readTemperatureRaw() {
-  if (!adsReady) return NAN;
-  // 8 samples — solar can push >75 °C; more averaging stabilises high end
-  int32_t sum = 0;
-  for (int i = 0; i < 8; i++) {
-    sum += ads.readADC_SingleEnded(0);
-    delay(2);
+void scanI2cBus() {
+  Serial.printf("[I2C] scan SDA=GPIO%d SCL=GPIO%d\n", I2C_SDA, I2C_SCL);
+  uint8_t found = 0;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    uint8_t err = Wire.endTransmission();
+    if (err == 0) {
+      Serial.printf("[I2C] device at 0x%02X\n", addr);
+      found++;
+    }
   }
-  float adc = sum / 8.0f;
-  float voltage = adc * 0.125f / 1000.0f;
-  // Allow closer to 3.3 V so ~100 °C remains measurable
-  if (voltage < 0.05f || voltage > 3.28f) return NAN;
-  float rNtc = FIXED_RESISTOR * ((VCC - voltage) / voltage);
-  float steinhart = logf(rNtc / NTC_R25) / NTC_BETA;
-  steinhart += 1.0f / 298.15f;
-  return (1.0f / steinhart) - 273.15f;
+  if (!found) Serial.println("[I2C] no devices found — check wiring / pull-ups / power");
 }
 
 bool initializeAds() {
-  if (!ads.begin(0x48)) return false;
-  ads.setGain(GAIN_ONE);
-  return true;
+  scanI2cBus();
+  // ADDR→GND = 0x48, ADDR→VDD = 0x49, ADDR→SDA = 0x4A, ADDR→SCL = 0x4B
+  const uint8_t candidates[] = {0x48, 0x49, 0x4A, 0x4B};
+  for (uint8_t a : candidates) {
+    Serial.printf("[ADS] try begin(0x%02X)...\n", a);
+    if (ads.begin(a)) {
+      ads.setGain(GAIN_ONE);  // ±4.096 V, 0.125 mV/LSB
+      // Sanity read on A0
+      int16_t sample = ads.readADC_SingleEnded(0);
+      float mv = sample * 0.125f;
+      Serial.printf("[ADS] OK at 0x%02X  gain=ONE  A0 raw=%d (%.2f mV)\n", a, sample, mv);
+      if (sample < 50) {
+        Serial.println("[ADS] WARN A0 near 0 — open circuit or probe shorted to GND?");
+      } else if (sample > 26000) {
+        Serial.println("[ADS] WARN A0 near full-scale — open to VCC or wrong divider?");
+      }
+      return true;
+    }
+  }
+  Serial.println("[ADS] begin failed on 0x48-0x4B");
+  return false;
 }
 
 void retryAdsInitialization() {
   if (adsReady || millis() - lastAdsRetry < 5000) return;
   lastAdsRetry = millis();
+  Serial.println("[ADS] retry init...");
   adsReady = initializeAds();
   if (adsReady) Serial.println("[ADS] recovered");
+  else Serial.println("[ADS] still not found");
+}
+
+float readTemperatureRaw() {
+  if (!adsReady) {
+    Serial.println("[NTC] skip — ADS not ready");
+    return NAN;
+  }
+  // 8 samples — solar can push >75 °C; more averaging stabilises high end
+  int32_t sum = 0;
+  int16_t first = 0, last = 0;
+  for (int i = 0; i < 8; i++) {
+    int16_t s = ads.readADC_SingleEnded(0);
+    if (i == 0) first = s;
+    last = s;
+    sum += s;
+    delay(2);
+  }
+  float adc = sum / 8.0f;
+  // GAIN_ONE: 0.125 mV per count
+  float voltage = adc * 0.125f / 1000.0f;
+
+  // Expected divider: 3.3V — NTC — A0 — Rfixed — GND
+  // V(A0) = VCC * Rfixed / (Rntc + Rfixed)
+  float rNtc = NAN;
+  float steinhartC = NAN;
+  const char* reject = nullptr;
+
+  if (adc < -100) {
+    reject = "negative ADC (floating/noise)";
+  } else if (voltage < 0.05f) {
+    reject = "V too low (open NTC or A0 short to GND)";
+  } else if (voltage > 3.28f) {
+    // Still compute resistance for the log using measured V
+    reject = "V too high (open Rfixed / NTC shorted to VCC / divider on 5V?)";
+  }
+
+  if (!reject) {
+    rNtc = FIXED_RESISTOR * ((VCC - voltage) / voltage);
+    if (rNtc <= 1.0f) {
+      reject = "Rntc invalid";
+    } else {
+      float steinhart = logf(rNtc / NTC_R25) / NTC_BETA;
+      steinhart += 1.0f / 298.15f;
+      steinhartC = (1.0f / steinhart) - 273.15f;
+    }
+  }
+
+  Serial.printf("[NTC] A0 raw avg=%.1f first=%d last=%d  V=%.4f  R=%.0f  T=%.2f%s%s\n",
+                adc, (int)first, (int)last, voltage,
+                isnan(rNtc) ? -1.0f : rNtc,
+                isnan(steinhartC) ? -999.0f : steinhartC,
+                reject ? "  REJECT: " : "",
+                reject ? reject : "");
+
+  if (reject) return NAN;
+  return steinhartC;
 }
 
 static float filteredTemp = NAN;

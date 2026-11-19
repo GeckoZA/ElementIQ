@@ -30,7 +30,7 @@ ESP32-C3-WROOM-02-N4 firmware: ADS1115 + NTC + relay, MQTT/HA, multi-page web UI
 | Part | Pin |
 |------|-----|
 | Relay | GPIO7 |
-| ADS1115 SDA/SCL | GPIO4 / GPIO5 |
+| ADS1115 SDA/SCL | GPIO4 / GPIO6 |
 | ADS1115 ADDR | GND → I2C address 0x48 |
 | NTC | ADS1115 A0 (3.3V — NTC — A0 — ~10.98 kΩ — GND) |
 | Status LED | GPIO8 (optional) |
