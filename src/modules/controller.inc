@@ -844,8 +844,10 @@ static bool scheduleWindowActive(const DayWindow& d, int nowM) {
   int offM = d.off_h * 60 + d.off_m;
   if (onM == offM) return true; // treat as all-day
   if (onM < offM) return nowM >= onM && nowM < offM;
-  // Overnight window (e.g. 22:00 → 06:00)
-  return nowM >= onM || nowM < offM;
+  // Overnight window (e.g. 22:00 → 02:00): on THIS day only the evening part
+  // (>= on) counts. The after-midnight tail belongs to the NEXT day and is
+  // handled via the "previous day" check in scheduleAllowsHeat().
+  return nowM >= onM;
 }
 
 bool scheduleAllowsHeat() {
@@ -1224,9 +1226,11 @@ void setupNTP() {
     snprintf(tz, sizeof(tz), "UTC-%d", (int)timezone);
   else
     snprintf(tz, sizeof(tz), "UTC+%d", (int)(-timezone));
+  // NOTE: configTime() internally resets TZ to UTC ("<+00>0"), so it MUST be
+  // called first. Set our TZ afterwards, otherwise localtime_r() returns UTC.
+  configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
   setenv("TZ", tz, 1);
   tzset();
-  configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
   eqLogf("[NTP] TZ=%s (offset %+d h)\n", tz, (int)timezone);
 }
 

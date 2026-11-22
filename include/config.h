@@ -77,7 +77,7 @@
 #define MQTT_BASE_TOPIC     "elementiq"
 #define HA_DISCOVERY_PREFIX "homeassistant"
 #define HTTP_PORT           80
-#define FIRMWARE_VERSION    "v1.0.1.14"
+#define FIRMWARE_VERSION    "v1.0.1.16"
 // Must appear in every official .bin — web/GitHub OTA rejects images without it
 #define OTA_PRODUCT_MARKER  "ElementIQ-FW"
 // ESP image chip_id for ESP32-C3 (see esp_image_format.h)
