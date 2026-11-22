@@ -486,11 +486,13 @@ void processPendingNetworkChanges() {
 void processPendingSystemActions() {
   bool resetSettings;
   bool resetWifi;
+  bool reboot;
   {
     StateGuard guard;
     resetSettings = pendingFactoryReset;
     resetWifi = pendingWifiReset;
-    pendingFactoryReset = pendingWifiReset = false;
+    reboot = pendingReboot;
+    pendingFactoryReset = pendingWifiReset = pendingReboot = false;
   }
   if (resetSettings) {
     factoryReset();
@@ -499,6 +501,13 @@ void processPendingSystemActions() {
   if (resetWifi) {
     setHeater(false, true);
     WiFi.disconnect(true);
+    ESP.restart();
+  }
+  if (reboot) {
+    // Heater off first, then let the HTTP response flush before restarting.
+    setHeater(false, true);
+    saveRuntimeStats();
+    delay(500);
     ESP.restart();
   }
 }

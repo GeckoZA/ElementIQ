@@ -642,6 +642,14 @@ void setupAPI() {
     }
     req->send(202, "text/plain", "Factory reset queued");
   });
+  server.on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!requireWebAuth(req)) return;
+    {
+      StateGuard guard;
+      pendingReboot = true;
+    }
+    req->send(202, "application/json", "{\"ok\":true,\"rebooting\":true}");
+  });
   server.on("/api/resetwifi", HTTP_GET, [](AsyncWebServerRequest *req) {
     if (!requireWebAuth(req)) return;
     {

@@ -113,6 +113,7 @@ bool otaBusy = false;
 int otaProgressPercent = -1;  // -1 = idle/unknown, 0-100 during transfer
 bool arduinoOtaReady = false;
 bool pendingFactoryReset = false;
+bool pendingReboot = false;
 bool pendingWifiReset = false;
 char apName[32] = AP_NAME;
 char friendlyName[40] = "ElementIQ";
