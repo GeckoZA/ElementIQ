@@ -1,6 +1,16 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include "control_logic.h"
+#include <esp_system.h>
+#if __has_include(<esp_random.h>)
+#include <esp_random.h>
+#endif
+#include <mbedtls/md.h>
+#include <Preferences.h>
+
+// Implemented in system.inc (included later in the same translation unit)
+void safeRestart();
+void otaGuardArm();
 
 Adafruit_ADS1115 ads;
 bool adsReady = false;
@@ -29,7 +39,7 @@ float ecoTemp = DEFAULT_ECO_TEMP;
 float boostMinTemp = DEFAULT_BOOST_MIN; // 0 = disabled
 uint32_t minOnMs = DEFAULT_MIN_ON_MS;
 uint32_t minOffMs = DEFAULT_MIN_OFF_MS;
-Mode mode = MODE_AUTO;
+Mode mode = MODE_OFF;            // safe default: never heat until configured / user chooses Auto
 Preset preset = PRESET_CUSTOM;
 bool heaterOn = false;
 bool sensorFault = false;
@@ -102,7 +112,13 @@ char mqtt_pass[32] = MQTT_PASS_DEFAULT;
 bool hideAp = false, apEnabled = true, mqttEnabled = true;
 bool webAuthEnabled = false;
 char webAuthUser[24] = WEB_AUTH_USER_DEFAULT;
-char webAuthPass[32] = WEB_AUTH_PASS_DEFAULT;
+// Admin password is never stored in clear: 8-byte random salt + iterated SHA-256 (hex).
+char webAuthSalt[17] = "";
+char webAuthHash[65] = "";
+bool setupDone = false;          // first-time setup wizard completed
+bool overTempFault = false;      // software hard trip (latched)
+bool otaRebootPending = false;   // image written, waiting to restart: heater stays off
+bool otaPendingVerify = false;   // freshly updated image not yet confirmed healthy
 
 bool pendingMqttReconnect = false;
 bool pendingStatePublish = false;
@@ -248,6 +264,7 @@ static_assert(offsetof(Settings, schema_tag) == offsetof(Settings, magic) + size
 
 bool saveSettings();
 void setHeater(bool on, bool force = false);
+const char* heaterInterlock();
 void setMode(Mode m);
 void publishState();
 void factoryReset();
@@ -268,35 +285,114 @@ bool tempValid(float t) {
 }
 
 
+// ---- Admin password: salted, iterated SHA-256 ----
+static void toHex(const uint8_t* in, size_t n, char* out) {
+  static const char* H = "0123456789abcdef";
+  for (size_t i = 0; i < n; i++) { out[i*2] = H[in[i] >> 4]; out[i*2+1] = H[in[i] & 15]; }
+  out[n*2] = 0;
+}
+
+static void hashPassword(const char* salt, const char* pass, char outHex[65]) {
+  uint8_t buf[32 + 16 + 64];
+  uint8_t h[32] = {0};
+  size_t sl = strnlen(salt, 16), pl = strnlen(pass, 63);
+  const mbedtls_md_info_t* md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  for (int i = 0; i < 2000; i++) {
+    memcpy(buf, h, 32);
+    memcpy(buf + 32, salt, sl);
+    memcpy(buf + 32 + sl, pass, pl);
+    mbedtls_md(md, buf, 32 + sl + pl, h);
+  }
+  toHex(h, 32, outHex);
+}
+
+static bool constTimeEq(const char* a, const char* b) {
+  size_t la = strlen(a), lb = strlen(b);
+  uint8_t d = (la != lb);
+  size_t n = la < lb ? la : lb;
+  for (size_t i = 0; i < n; i++) d |= (uint8_t)(a[i] ^ b[i]);
+  return d == 0;
+}
+
+bool adminPasswordSet() { return webAuthHash[0] != 0; }
+
+bool verifyAdminLogin(const char* user, const char* pass) {
+  if (!adminPasswordSet()) return false;
+  char h[65];
+  hashPassword(webAuthSalt, pass ? pass : "", h);
+  bool userOk = constTimeEq(user ? user : "", webAuthUser);
+  bool passOk = constTimeEq(h, webAuthHash);
+  return userOk && passOk;
+}
+
+void setAdminPassword(const char* pass) {
+  uint8_t r[8];
+  esp_fill_random(r, sizeof(r));
+  toHex(r, sizeof(r), webAuthSalt);
+  hashPassword(webAuthSalt, pass, webAuthHash);
+}
+
+void saveWebAuth() {
+  File f = LittleFS.open("/webauth.txt", "w");
+  if (!f) return;
+  // v2 format: 2|user|salt|hash
+  f.printf("2|%s|%s|%s", webAuthUser, webAuthSalt, webAuthHash);
+  f.close();
+}
+
 void loadWebAuth() {
   if (!LittleFS.exists("/webauth.txt")) return;
   File f = LittleFS.open("/webauth.txt", "r");
   if (!f) return;
   String line = f.readString();
   f.close();
-  // format: enabled|user|pass
-  int p1 = line.indexOf('|');
-  int p2 = line.indexOf('|', p1 + 1);
-  if (p1 < 0 || p2 < 0) return;
-  webAuthEnabled = line.substring(0, p1).toInt() != 0;
-  String u = line.substring(p1 + 1, p2);
-  String p = line.substring(p2 + 1);
-  u.trim(); p.trim();
-  if (u.length() > 0 && u.length() < (int)sizeof(webAuthUser)) {
-    strncpy(webAuthUser, u.c_str(), sizeof(webAuthUser) - 1);
+  line.trim();
+  if (line.startsWith("2|")) {
+    int p1 = line.indexOf('|', 2), p2 = line.indexOf('|', p1 + 1);
+    if (p1 < 0 || p2 < 0) return;
+    String u = line.substring(2, p1), salt = line.substring(p1 + 1, p2), hash = line.substring(p2 + 1);
+    if (u.length() > 0 && u.length() < (int)sizeof(webAuthUser)) strlcpy(webAuthUser, u.c_str(), sizeof(webAuthUser));
+    if (salt.length() == 16 && hash.length() == 64) {
+      strlcpy(webAuthSalt, salt.c_str(), sizeof(webAuthSalt));
+      strlcpy(webAuthHash, hash.c_str(), sizeof(webAuthHash));
+    }
+  } else {
+    // Legacy v1 "enabled|user|plaintext": migrate to a hash and rewrite the file.
+    int p1 = line.indexOf('|');
+    int p2 = line.indexOf('|', p1 + 1);
+    if (p1 < 0 || p2 < 0) return;
+    bool wasEnabled = line.substring(0, p1).toInt() != 0;
+    String u = line.substring(p1 + 1, p2), p = line.substring(p2 + 1);
+    u.trim(); p.trim();
+    if (u.length() > 0 && u.length() < (int)sizeof(webAuthUser)) strlcpy(webAuthUser, u.c_str(), sizeof(webAuthUser));
+    if (wasEnabled && p.length() > 0 && p.length() < 32) {
+      setAdminPassword(p.c_str());
+      saveWebAuth();
+      eqLog("[AUTH] legacy plaintext password migrated to salted hash");
+    } else {
+      LittleFS.remove("/webauth.txt");   // auth was off: nothing to keep
+    }
   }
-  if (p.length() < (int)sizeof(webAuthPass)) {
-    strncpy(webAuthPass, p.c_str(), sizeof(webAuthPass) - 1);
-  }
-  if (!webAuthPass[0]) webAuthEnabled = false;
-  eqLogf("[AUTH] web auth %s user=%s\n", webAuthEnabled ? "ON" : "off", webAuthUser);
+  eqLogf("[AUTH] admin login %s user=%s\n", adminPasswordSet() ? "ON" : "not set", webAuthUser);
 }
 
-void saveWebAuth() {
-  File f = LittleFS.open("/webauth.txt", "w");
-  if (!f) return;
-  f.printf("%d|%s|%s", webAuthEnabled ? 1 : 0, webAuthUser, webAuthPass);
-  f.close();
+// ---- First-time setup flag (NVS, survives OTA, cleared by factory reset) ----
+void loadSetupDone() {
+  Preferences p;
+  p.begin("eiq", false);
+  bool known = p.isKey("setup");
+  setupDone = p.getUChar("setup", 0) != 0;
+  p.end();
+  if (!known && wifi_ssid[0]) {
+    // Unit configured before the wizard existed: treat as already set up.
+    setupDone = true;
+    Preferences w; w.begin("eiq", false); w.putUChar("setup", 1); w.end();
+  }
+}
+
+void markSetupDone() {
+  setupDone = true;
+  Preferences p; p.begin("eiq", false); p.putUChar("setup", 1); p.end();
 }
 
 void ensureDeviceSerial() {
@@ -329,6 +425,7 @@ void ensureDeviceSerial() {
 
 void clearElementFault() {
   elementFault = false;
+  overTempFault = false;
   elementHeatStartedAt = 0;
   elementHeatStartTemp = NAN;
 }
@@ -403,12 +500,14 @@ void loadSettings() {
     return;
   }
   if (!isfinite(s.setpoint) || s.setpoint < MIN_SETPOINT ||
-      s.setpoint > MAX_SETPOINT || s.mode > static_cast<uint8_t>(MODE_BOOST)) {
+      s.setpoint > 100.0f || s.mode > static_cast<uint8_t>(MODE_BOOST)) {
     eqLog("[EEPROM] invalid setpoint or mode; using defaults");
     initDefaultSchedule();
     return;
   }
-  setpoint = s.setpoint;
+  // MAX_SETPOINT was lowered from 100 to 80 °C: clamp old saved values instead
+  // of discarding the whole record (which would also wipe Wi-Fi credentials).
+  setpoint = constrain(s.setpoint, MIN_SETPOINT, MAX_SETPOINT);
   mode = (Mode)s.mode;
   strncpy(mqtt_host, s.mqtt_host, sizeof(mqtt_host)-1);
   strncpy(mqtt_port, s.mqtt_port, sizeof(mqtt_port)-1);
@@ -556,10 +655,14 @@ bool saveSettings() {
 
 void factoryReset() {
   eqLog("[RESET] Factory reset");
+  mode = MODE_OFF;                 // hard-safe default for the next boot
   setHeater(false, true);
+  digitalWrite(RELAY_PIN, LOW);    // pin LOW even if setHeater short-circuits
   if (!eepromReady) eepromReady = EEPROM.begin(EEPROM_SIZE);
   if (eepromReady) {
     Settings blank; memset(&blank, 0, sizeof(blank));
+    // Explicit OFF so a partially-written or legacy reader cannot leave AUTO on
+    blank.mode = static_cast<uint8_t>(MODE_OFF);
     EEPROM.put(0, blank);
     if (!EEPROM.commit()) {
       settingsSaveOk = false;
@@ -573,9 +676,13 @@ void factoryReset() {
   }
   LittleFS.remove(HISTORY_FILE);
   LittleFS.remove(RUNTIME_FILE);
-  WiFi.disconnect(true);
+  LittleFS.remove("/webauth.txt");           // admin login must not survive a factory reset
+  { Preferences p; p.begin("eiq", false); p.clear(); p.end(); }   // setup-complete flag
+  // Erase stored STA credentials (second arg) so the next boot does not auto-join
+  // the old network and interfere with the captive-portal AP / 192.168.4.1.
+  WiFi.disconnect(true, true);
   delay(300);
-  ESP.restart();
+  safeRestart();
 }
 
 // Calibration table: raw NTC °C → true (calibrated probe) °C
@@ -895,7 +1002,7 @@ bool scheduleAllowsHeat() {
 
 // Human-readable reason Auto heat is blocked (for MQTT / UI)
 String heatBlockReason() {
-  if (otaInProgress) return "ota";
+  if (const char* why = heaterInterlock()) return why;
   if (elementFault) return "element_fault";
   if (sensorFault) return "sensor_fault";
   if (!tempValid(currentTemp)) return "sensor_invalid";
@@ -914,10 +1021,31 @@ String heatBlockReason() {
   return "idle";
 }
 
+// Single place that decides whether the relay may be energised right now.
+// Returns nullptr when heating is allowed, else a short reason (also used for MQTT/UI).
+const char* heaterInterlock() {
+  if (otaInProgress || otaRebootPending) return "ota";
+  if (overTempFault) return "over_temperature";
+  if (millis() < BOOT_HEATER_HOLD_MS) return "boot_hold";       // relay off after every (re)boot
+  if (otaPendingVerify) return "update_probation";             // new firmware not yet confirmed healthy
+  // Never heat during first-time setup / after factory reset until the wizard finishes.
+  // Default mode is AUTO with a 55 °C setpoint; a valid cold reading would otherwise
+  // energise the relay as soon as the 20 s boot hold expires — unsafe on an unconfigured unit.
+  if (!setupDone) return "setup";
+  return nullptr;
+}
+
 void setHeater(bool on, bool force) {
   if (on) {
+    const char* why = heaterInterlock();
+    if (why) {
+      on = false;
+      force = true;
+    }
     // Never turn on with bad sensor or failed element
-    if (!tempValid(currentTemp) || sensorFault || elementFault) {
+    if (!on) {
+      // interlock already forced off
+    } else if (!tempValid(currentTemp) || sensorFault || elementFault) {
       eqLog(elementFault ? "[HEATER] blocked – element fault" : "[HEATER] blocked – sensor fault/invalid");
       on = false;
       force = true;
@@ -951,6 +1079,16 @@ void updateThermostat() {
     return;
   }
   bool sampleValid = tempValid(currentTemp);
+  if (sampleValid && currentTemp >= TEMP_HARD_TRIP && !overTempFault) {
+    overTempFault = true;
+    elementFault = true;          // reuses the existing "fault, heater locked off" UI/MQTT path
+    setHeater(false, true);
+    mode = MODE_OFF;
+    saveSettings();
+    eqLogf("[SAFETY] OVER-TEMPERATURE %.1f >= %.1f - heater locked off until acknowledged\n",
+           currentTemp, (double)TEMP_HARD_TRIP);
+    publishState();
+  }
   if (!sampleValid) {
     if (badSensorSince == 0) badSensorSince = millis();
   } else {
@@ -1203,10 +1341,6 @@ void pushHistory(float t) {
   }
   histDirtyCount++;
   if (histDirtyCount >= HISTORY_SAVE_EVERY) saveHistoryToFlash();
-}
-
-void updateWifiLed() {
-  digitalWrite(LED_PIN, (WiFi.status() == WL_CONNECTED) ? LOW : HIGH);
 }
 
 void setupMDNS() {

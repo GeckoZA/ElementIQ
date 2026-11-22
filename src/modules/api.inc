@@ -1,8 +1,135 @@
-// ---- API helpers ----
+#include "ota_marker.h"
+// ---- Web authentication: cookie sessions + CSRF protection ----
+//  * Login:  POST /api/login {user,pass}  ->  HttpOnly + SameSite=Strict session cookie
+//  * Every state-changing request (anything but GET/HEAD) must carry the header
+//    X-EIQ-CSRF equal to the session's token (fetched from GET /api/session).
+//    A third-party web page cannot read that token (no CORS headers are sent) and
+//    cannot add a custom header cross-origin without a pre-flight we never approve.
+//  * The Origin header, when present, must match this device's Host.
+//  * Brute-force: LOGIN_MAX_FAILS wrong attempts lock logins for LOGIN_LOCK_MS.
+struct WebSession { bool used; char sid[33]; char csrf[33]; uint32_t created; uint32_t lastSeen; };
+static WebSession webSessions[SESSION_MAX];
+static uint8_t loginFails = 0;
+static uint32_t loginLockUntil = 0;
+static bool loginLocked = false;
+
+static String cookieValue(AsyncWebServerRequest* req, const char* name) {
+  if (!req->hasHeader("Cookie")) return "";
+  String c = req->header("Cookie");
+  String key = String(name) + "=";
+  int i = 0;
+  while (i < (int)c.length()) {
+    int e = c.indexOf(';', i);
+    if (e < 0) e = c.length();
+    String part = c.substring(i, e);
+    part.trim();
+    if (part.startsWith(key)) return part.substring(key.length());
+    i = e + 1;
+  }
+  return "";
+}
+
+static WebSession* findSession(AsyncWebServerRequest* req) {
+  String sid = cookieValue(req, "eiq_sid");
+  if (sid.length() != 32) return nullptr;
+  uint32_t now = millis();
+  WebSession* hit = nullptr;
+  for (auto& s : webSessions) {
+    if (!s.used) continue;
+    if (now - s.lastSeen > SESSION_IDLE_MS || now - s.created > SESSION_ABS_MS) { s.used = false; continue; }
+    if (constTimeEq(s.sid, sid.c_str())) hit = &s;
+  }
+  if (hit) hit->lastSeen = now;
+  return hit;
+}
+
+static WebSession* createSession() {
+  uint32_t now = millis();
+  WebSession* slot = nullptr;
+  for (auto& s : webSessions) {
+    if (!s.used) { slot = &s; break; }
+    if (!slot || s.lastSeen < slot->lastSeen) slot = &s;   // evict the least recently used
+  }
+  uint8_t r[16];
+  esp_fill_random(r, sizeof(r)); toHex(r, sizeof(r), slot->sid);
+  esp_fill_random(r, sizeof(r)); toHex(r, sizeof(r), slot->csrf);
+  slot->used = true; slot->created = now; slot->lastSeen = now;
+  return slot;
+}
+
+static void purgeSessionsExcept(const WebSession* keep) {
+  for (auto& s : webSessions) if (&s != keep) s.used = false;
+}
+
+static bool isUnsafeMethod(AsyncWebServerRequest* req) {
+  return req->method() != HTTP_GET && req->method() != HTTP_HEAD;
+}
+
+static bool originOk(AsyncWebServerRequest* req) {
+  if (!req->hasHeader("Origin")) return true;
+  String o = req->header("Origin");
+  int i = o.indexOf("://");
+  if (i < 0) return false;
+  return o.substring(i + 3).equalsIgnoreCase(req->host());
+}
+
+static bool csrfHeaderPresent(AsyncWebServerRequest* req, const WebSession* ses) {
+  if (!req->hasHeader("X-EIQ-CSRF")) return false;
+  String t = req->header("X-EIQ-CSRF");
+  if (!ses) return t.length() > 0;               // no login configured: custom header is the CSRF guard
+  return constTimeEq(ses->csrf, t.c_str());
+}
+
+static void denyAccess(AsyncWebServerRequest* req, int code, const char* msg) {
+  bool pageNav = req->method() == HTTP_GET && !req->url().startsWith("/api/") &&
+                 req->url() != "/scan" && req->url() != "/portal-status";
+  if (pageNav) {
+    req->redirect(setupDone ? "/login" : "/");
+    return;
+  }
+  String body = String("{\"error\":\"") + msg + "\"}";
+  req->send(code, "application/json", body);
+}
+
+// Returns true when the caller may proceed; otherwise a response has been sent.
 bool requireWebAuth(AsyncWebServerRequest* req) {
-  if (!webAuthEnabled || !webAuthPass[0]) return true;
-  if (req->authenticate(webAuthUser, webAuthPass)) return true;
-  req->requestAuthentication("ElementIQ");
+  bool unsafe = isUnsafeMethod(req);
+  if (unsafe && !originOk(req)) { denyAccess(req, 403, "cross-origin request blocked"); return false; }
+  WebSession* ses = nullptr;
+  if (adminPasswordSet()) {
+    ses = findSession(req);
+    if (!ses) { denyAccess(req, 401, "login required"); return false; }
+  } else if (!setupDone) {
+    denyAccess(req, 403, "first-time setup not finished");
+    return false;
+  }
+  // else: legacy unit without a password stays open (CSRF header still enforced below)
+  if (unsafe && !csrfHeaderPresent(req, ses)) { denyAccess(req, 403, "missing CSRF token"); return false; }
+  return true;
+}
+
+// Captive-portal routes: open ONLY until first-time setup is complete.
+bool requirePortalAccess(AsyncWebServerRequest* req) {
+  if (!setupDone) {
+    if (isUnsafeMethod(req) && (!originOk(req) || !csrfHeaderPresent(req, nullptr))) {
+      req->send(403, "application/json", "{\"error\":\"blocked\"}");
+      return false;
+    }
+    return true;
+  }
+  return requireWebAuth(req);
+}
+
+// Dangerous actions (firmware upload/install, factory reset, Wi-Fi change) on a unit with NO
+// admin password need a physical confirmation: hold the BOOT button for 3 s (opens a 60 s window).
+// With a password set, the login is the protection and this always passes.
+uint32_t dangerArmedUntil = 0;
+bool dangerArmed = false;
+bool requireDangerAuth(AsyncWebServerRequest* req) {
+  if (adminPasswordSet()) return true;
+  if (dangerArmed && (int32_t)(millis() - dangerArmedUntil) < 0) return true;
+  req->send(403, "application/json",
+            "{\"error\":\"No password is set, so this needs a physical confirmation: hold the BOOT button on the controller for 3 seconds, then try again.\"}");
   return false;
 }
 
@@ -51,13 +178,15 @@ bool applySettingsJson(JsonDocument& doc) {
     if (pw && strlen(pw) > 0) copyStr(mqtt_pass, sizeof(mqtt_pass), doc["mqtt_pass"]);
   }
   if (!doc["mqtt_enabled"].isNull()) mqttEnabled = doc["mqtt_enabled"].as<bool>();
-  if (!doc["web_auth_enabled"].isNull()) webAuthEnabled = doc["web_auth_enabled"].as<bool>();
-  copyStr(webAuthUser, sizeof(webAuthUser), doc["web_auth_user"]);
+  // Login is always on once a password exists; "web_auth_enabled" from old pages is ignored.
+  if (!doc["web_auth_user"].isNull()) {
+    const char* u = doc["web_auth_user"].as<const char*>();
+    if (u && u[0] && strlen(u) < sizeof(webAuthUser)) strlcpy(webAuthUser, u, sizeof(webAuthUser));
+  }
   if (!doc["web_auth_pass"].isNull()) {
     const char* p = doc["web_auth_pass"].as<const char*>();
-    if (p && strlen(p) > 0) copyStr(webAuthPass, sizeof(webAuthPass), doc["web_auth_pass"]);
+    if (p && strlen(p) >= PASSWORD_MIN_LEN && strlen(p) < 32) setAdminPassword(p);
   }
-  if (!webAuthPass[0]) webAuthEnabled = false;
 
   if (strlen(mqtt_port) == 0) strncpy(mqtt_port, "1883", sizeof(mqtt_port)-1);
   if (!doc["ap_enabled"].isNull()) { apEnabled = doc["ap_enabled"].as<bool>(); hideAp = !apEnabled; }
@@ -155,6 +284,67 @@ bool applySettingsJson(JsonDocument& doc) {
 
 void setupAPI() {
 
+  // ---- Login / session ----
+  server.on("/api/login", HTTP_POST, [](AsyncWebServerRequest *req) {}, nullptr,
+    [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
+      static String body;
+      if (index == 0) body = "";
+      if (body.length() + len <= 256) body.concat(reinterpret_cast<const char*>(data), len);
+      if (index + len < total) return;
+      String in = body; body = "";
+      if (!originOk(req) || !csrfHeaderPresent(req, nullptr)) {
+        req->send(403, "application/json", "{\"error\":\"blocked\"}");
+        return;
+      }
+      uint32_t now = millis();
+      if (loginLocked && (int32_t)(now - loginLockUntil) < 0) {
+        char m[80];
+        snprintf(m, sizeof(m), "{\"error\":\"Too many attempts. Try again in %u s\"}",
+                 (unsigned)((loginLockUntil - now) / 1000 + 1));
+        req->send(429, "application/json", m);
+        return;
+      }
+      loginLocked = false;
+      JsonDocument doc;
+      if (deserializeJson(doc, in)) { req->send(400, "application/json", "{\"error\":\"bad request\"}"); return; }
+      bool ok = verifyAdminLogin(doc["user"] | "", doc["pass"] | "");
+      if (!ok) {
+        if (++loginFails >= LOGIN_MAX_FAILS) {
+          loginFails = 0; loginLocked = true; loginLockUntil = now + LOGIN_LOCK_MS;
+          eqLog("[AUTH] too many failed logins - locked for 60 s");
+        }
+        req->send(401, "application/json", "{\"error\":\"Wrong username or password\"}");
+        return;
+      }
+      loginFails = 0;
+      WebSession* ses = createSession();
+      AsyncWebServerResponse *res = req->beginResponse(200, "application/json", "{\"ok\":true}");
+      String cookie = String("eiq_sid=") + ses->sid + "; Path=/; HttpOnly; SameSite=Strict";
+      res->addHeader("Set-Cookie", cookie);
+      res->addHeader("Cache-Control", "no-store");
+      req->send(res);
+      eqLog("[AUTH] login ok");
+    });
+
+  server.on("/api/logout", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!originOk(req) || !csrfHeaderPresent(req, nullptr)) { req->send(403, "application/json", "{\"error\":\"blocked\"}"); return; }
+    WebSession* ses = findSession(req);
+    if (ses) ses->used = false;
+    AsyncWebServerResponse *res = req->beginResponse(200, "application/json", "{\"ok\":true}");
+    res->addHeader("Set-Cookie", "eiq_sid=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    req->send(res);
+  });
+
+  // The page's script fetches its CSRF token here (same-origin only; no CORS headers are sent).
+  server.on("/api/session", HTTP_GET, [](AsyncWebServerRequest *req) {
+    if (!requireWebAuth(req)) return;
+    WebSession* ses = adminPasswordSet() ? findSession(req) : nullptr;
+    String json = String("{\"auth\":") + (ses ? "true" : "false") + ",\"csrf\":\"" + (ses ? ses->csrf : "open") + "\"}";
+    AsyncWebServerResponse *res = req->beginResponse(200, "application/json", json);
+    res->addHeader("Cache-Control", "no-store");
+    req->send(res);
+  });
+
   server.on("/api/console", HTTP_GET, [](AsyncWebServerRequest *req) {
     if (!requireWebAuth(req)) return;
     uint32_t since = 0;
@@ -225,8 +415,11 @@ void setupAPI() {
     doc["heat_block_reason"] = heatBlockReason();
     doc["sensor_fault_code"] = sensorFaultName();
     doc["element_fault"] = elementFault;
-    doc["web_auth_enabled"] = webAuthEnabled;
+    doc["web_auth_enabled"] = adminPasswordSet();
     doc["web_auth_user"] = webAuthUser;
+    doc["setup_done"] = setupDone;
+    doc["max_setpoint"] = MAX_SETPOINT;
+    doc["over_temp"] = overTempFault;
     doc["hardware_version"] = HARDWARE_VERSION;
     doc["serial_number"] = deviceSerial;
     if (mode == MODE_BOOST) {
@@ -399,6 +592,16 @@ void setupAPI() {
         return;
       }
       StateGuard guard;
+      bool passwordChanged = false;
+      if (!doc["web_auth_pass"].isNull()) {
+        const char* wp = doc["web_auth_pass"].as<const char*>();
+        size_t wl = wp ? strlen(wp) : 0;
+        if (wl > 0 && (wl < PASSWORD_MIN_LEN || wl > 31)) {
+          req->send(400, "application/json", "{\"error\":\"Password must be 8-31 characters\"}");
+          return;
+        }
+        passwordChanged = wl > 0;
+      }
       if (!doc["ap_pass"].isNull()) {
         const char* password = doc["ap_pass"].as<const char*>();
         size_t length = password ? strlen(password) : 0;
@@ -411,6 +614,7 @@ void setupAPI() {
         req->send(500, "application/json", "{\"error\":\"settings save failed\"}");
         return;
       }
+      if (passwordChanged) purgeSessionsExcept(findSession(req));   // sign out every other browser
       pendingStatePublish = true;
       req->send(200, "application/json", "{\"ok\":true}");
     });
@@ -425,19 +629,23 @@ void setupAPI() {
   });
   server.on("/api/ota/install", HTTP_POST, [](AsyncWebServerRequest *req) {
     if (!requireWebAuth(req)) return;
+    if (!requireDangerAuth(req)) return;
     if (!queueOtaOperation(true)) {
       req->send(409, "application/json", "{\"error\":\"OTA worker busy\"}");
       return;
     }
     req->send(202, "application/json", "{\"queued\":true}");
   });
+  static bool uploadDenied = false;
   // Browser firmware upload: POST raw .bin body to /api/ota/upload
   // begin(UPDATE_SIZE_UNKNOWN) avoids "Bad Size Given" when Content-Length is
   // missing or wrong. Update.end() runs only in the request-complete handler.
   server.on(
     "/api/ota/upload", HTTP_POST,
     [](AsyncWebServerRequest *req) {
+      if (uploadDenied) { uploadDenied = false; return; }   // the body handler already replied
       if (!requireWebAuth(req)) return;
+      if (!requireDangerAuth(req)) return;
       bool started = false;
       {
         StateGuard guard;
@@ -458,6 +666,9 @@ void setupAPI() {
         otaBusy = false;
         otaInProgress = false;
         if (ok) {
+          otaRebootPending = true;       // relay stays off until the new image is confirmed
+          setHeater(false, true);
+          otaGuardArm();
           markOtaSuccess(FIRMWARE_VERSION);
           lastOtaMsg = "Update complete — rebooting";
           otaProgressPercent = 100;
@@ -469,8 +680,9 @@ void setupAPI() {
       }
       if (ok) {
         req->send(200, "text/plain", "OK");
-        delay(500);
-        ESP.restart();
+        // Restart from loop() a moment later so this response is fully sent first.
+        StateGuard guard;
+        pendingReboot = true;
       } else {
         if (started) Update.abort();
         req->send(500, "text/plain", lastOtaMsg.c_str());
@@ -478,17 +690,20 @@ void setupAPI() {
     },
     nullptr,
     [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
-      if (!requireWebAuth(req)) return;
+      if (index == 0) uploadDenied = false;
+      if (uploadDenied) return;
+      if (!requireWebAuth(req) || (index == 0 && !requireDangerAuth(req))) {
+        uploadDenied = true;     // reply already sent; ignore the remaining chunks
+        return;
+      }
       static bool hdrOk = false;
-      static bool markerOk = false;
-      static size_t scanWindow = 0;
+      static MarkerScanner marker;
       static uint8_t headBuf[24];
       static size_t headLen = 0;
 
       if (index == 0) {
         hdrOk = false;
-        markerOk = false;
-        scanWindow = 0;
+        marker.begin(OTA_PRODUCT_MARKER);
         headLen = 0;
         {
           StateGuard guard;
@@ -560,21 +775,9 @@ void setupAPI() {
             Serial.printf("[OTA] header OK magic=0xE9 chip_id=%u\n", (unsigned)chipId);
           }
         }
-        // Require official ElementIQ product marker in the image
-        if (!markerOk && scanWindow < 256000) {
-          const char* marker = OTA_PRODUCT_MARKER;
-          const size_t mlen = strlen(marker);
-          if (mlen > 0 && len >= mlen) {
-            for (size_t i = 0; i + mlen <= len; i++) {
-              if (memcmp(data + i, marker, mlen) == 0) {
-                markerOk = true;
-                Serial.println("[OTA] product marker found");
-                break;
-              }
-            }
-          }
-          scanWindow += len;
-        }
+        // Require official ElementIQ product marker anywhere in the image
+        // (scanned across chunk boundaries, over the whole file).
+        marker.feed(data, len);
 
         if (Update.write(data, len) != len) {
           StateGuard guard;
@@ -595,7 +798,7 @@ void setupAPI() {
           Update.abort();
           return;
         }
-        if (!markerOk) {
+        if (!marker.found) {
           StateGuard guard;
           lastOtaMsg = "Rejected: not an official ElementIQ firmware image";
           otaProgressPercent = -1;
@@ -623,6 +826,10 @@ void setupAPI() {
       req->send(200, "application/json", "{\"ok\":true,\"cleared\":false}");
       return;
     }
+    if (overTempFault && tempValid(currentTemp) && currentTemp >= MAX_SETPOINT) {
+      req->send(409, "application/json", "{\"error\":\"tank is still too hot - wait for it to cool below the maximum setpoint\"}");
+      return;
+    }
     // Only clear after user ack; do not clear if sensor still bad
     if (sensorFault || !tempValid(currentTemp) || !adsReady) {
       req->send(409, "application/json", "{\"error\":\"sensor still unhealthy — cannot clear element fault\"}");
@@ -636,11 +843,13 @@ void setupAPI() {
 
   server.on("/api/factoryreset", HTTP_POST, [](AsyncWebServerRequest *req) {
     if (!requireWebAuth(req)) return;
+    if (!requireDangerAuth(req)) return;
     {
       StateGuard guard;
       pendingFactoryReset = true;
     }
-    req->send(202, "text/plain", "Factory reset queued");
+    eqLog("[RESET] factory reset queued from web UI");
+    req->send(202, "application/json", "{\"ok\":true,\"queued\":true}");
   });
   server.on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
     if (!requireWebAuth(req)) return;
@@ -650,13 +859,14 @@ void setupAPI() {
     }
     req->send(202, "application/json", "{\"ok\":true,\"rebooting\":true}");
   });
-  server.on("/api/resetwifi", HTTP_GET, [](AsyncWebServerRequest *req) {
+  server.on("/api/resetwifi", HTTP_POST, [](AsyncWebServerRequest *req) {
     if (!requireWebAuth(req)) return;
+    if (!requireDangerAuth(req)) return;
     {
       StateGuard guard;
       pendingWifiReset = true;
     }
-    req->send(202, "text/plain", "WiFi reset queued");
+    req->send(202, "application/json", "{\"ok\":true,\"queued\":true}");
   });
 }
 

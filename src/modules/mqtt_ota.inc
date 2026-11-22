@@ -1,3 +1,4 @@
+#include "ota_marker.h"
 // ---- MQTT ----
 void publishState() {
   StateGuard guard;
@@ -664,6 +665,8 @@ void mqttLoop() {
   }
 }
 
+#if ENABLE_ARDUINO_OTA
+// Development only: ArduinoOTA on the LAN has no authentication here.
 void setupArduinoOTA() {
   ArduinoOTA.setHostname("ElementIQ");
   ArduinoOTA.onStart([]() {
@@ -671,8 +674,16 @@ void setupArduinoOTA() {
     otaInProgress = true;
     setHeater(false, true);
   });
+  ArduinoOTA.onEnd([]() {
+    StateGuard guard;
+    otaRebootPending = true;
+    setHeater(false, true);
+    otaGuardArm();
+  });
   ArduinoOTA.begin();
 }
+#endif
+
 
 // Download a firmware image over HTTPS, following redirects (required for GitHub assets).
 // HTTPUpdate alone often returns "HTTP error: Wrong HTTP code" on GitHub 302 → CDN.
@@ -733,10 +744,9 @@ bool installFirmwareFromUrl(const String& url, String& result) {
   uint8_t buf[1024];
   size_t written = 0;
   int lastPct = -1;
-  bool markerOk = false;
   bool hdrOk = false;
-  const char* marker = OTA_PRODUCT_MARKER;
-  const size_t mlen = strlen(marker);
+  MarkerScanner marker;            // scans the WHOLE image, across chunk boundaries
+  marker.begin(OTA_PRODUCT_MARKER);
   while (http.connected() && (contentLen <= 0 || (int)written < contentLen)) {
     size_t avail = stream.available();
     if (!avail) {
@@ -763,11 +773,7 @@ bool installFirmwareFromUrl(const String& url, String& result) {
       }
       hdrOk = true;
     }
-    if (!markerOk && mlen && written < 256000) {
-      for (int i = 0; i + (int)mlen <= n; i++) {
-        if (memcmp(buf + i, marker, mlen) == 0) { markerOk = true; break; }
-      }
-    }
+    marker.feed(buf, (size_t)n);
     if (Update.write(buf, n) != (size_t)n) {
       result = String("Write failed: ") + Update.errorString();
       Update.abort();
@@ -787,7 +793,7 @@ bool installFirmwareFromUrl(const String& url, String& result) {
     }
   }
 
-  if (!markerOk) {
+  if (!marker.found) {
     result = "Rejected: not an official ElementIQ firmware image";
     Update.abort();
     http.end();
@@ -952,6 +958,13 @@ void otaWorker(void*) {
     }
     String message;
     bool ok = checkGitHubUpdate(command == OTA_INSTALL, owner, repo, message);
+    if (ok && command == OTA_INSTALL) {
+      // Image is written: keep the relay off from here until the new firmware has proven itself.
+      StateGuard guard;
+      otaRebootPending = true;
+      setHeater(false, true);
+      otaGuardArm();
+    }
     {
       StateGuard guard;
       lastOtaMsg = message;
@@ -964,7 +977,7 @@ void otaWorker(void*) {
     if (ok && command == OTA_INSTALL) {
       markOtaSuccess(FIRMWARE_VERSION);
       delay(800);
-      ESP.restart();
+      safeRestart();
     }
   }
 }

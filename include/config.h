@@ -6,8 +6,22 @@
 #define RELAY_PIN           7
 #define I2C_SDA             4
 #define I2C_SCL             6
-#define LED_PIN             8     // Common onboard LED / RGB data (active LOW on many boards)
-#define FACTORY_RESET_PIN   9     // BOOT button (hold LOW at boot ~5s to factory reset)
+#define FACTORY_RESET_PIN   9     // BOOT button (hold LOW at boot ~5s to factory reset). GPIO9 is a strapping pin.
+
+// Status RGB LED (analog RGB, one PWM channel per colour, each via its own
+// series resistor). All three are NON-strapping GPIOs on the ESP32-C3:
+//   strapping pins are GPIO2, GPIO8, GPIO9 (avoid); GPIO18/19 = USB, GPIO20/21 = UART0.
+#define STATUS_LED_R_PIN    10
+#define STATUS_LED_G_PIN    5
+#define STATUS_LED_B_PIN    3
+#define STATUS_LED_COMMON_ANODE 0   // 0 = common cathode (HIGH = on), 1 = common anode (LOW = on)
+#define STATUS_LED_BRIGHTNESS   160 // 0-255 global brightness cap (full 255 is very bright indoors)
+
+// Reserved for future accessories (do not use for anything else):
+//   GPIO0, GPIO1 = ADC1 capable, free  -> leak-detect input / spare
+//   Water-pressure transducer           -> ADS1115 channel A1 (A2/A3 spare), no extra GPIO needed
+#define ACC_RESERVED_PIN_A  0
+#define ACC_RESERVED_PIN_B  1
 
 // ============================================================
 //  Thermistor (raw Steinhart–Hart, then calibration table)
@@ -36,7 +50,8 @@
 #define DEFAULT_ECO_TEMP    50.0f
 #define DEFAULT_BOOST_MIN   0.0f
 #define MIN_SETPOINT        30.0f
-#define MAX_SETPOINT        100.0f
+#define MAX_SETPOINT        80.0f   /* 90 °C physical cut-out fitted; keep a 10 °C margin */
+#define TEMP_HARD_TRIP      85.0f   /* software trip: heater off + latched fault until acknowledged */
 #define TEMP_VALID_MIN      5.0f
 #define TEMP_VALID_MAX      110.0f
 #define BOOST_SAFETY_MS     (90UL * 60UL * 1000UL)
@@ -44,6 +59,25 @@
 #define ELEMENT_RISE_LOW    3.0f   /* expected °C rise near 40°C in window */
 #define ELEMENT_RISE_HIGH   0.8f   /* expected °C rise near 70°C+ in window */
 #define SENSOR_FAULT_MS     (3UL * 60UL * 1000UL)
+
+// ============================================================
+//  Safety / reliability
+// ============================================================
+#define WDT_TIMEOUT_S           20           /* task watchdog: reboot if loop() stalls this long */
+#define BOOT_HEATER_HOLD_MS     20000UL      /* relay stays off this long after every boot */
+#define OTA_CONFIRM_MS          60000UL      /* new firmware must run healthy this long to be kept */
+#define OTA_MAX_CRASH_BOOTS     2            /* crash/WDT resets before an unconfirmed image is rolled back */
+#define ENABLE_ARDUINO_OTA      0            /* 1 = LAN "pio upload over network" (unauthenticated!) - dev only */
+
+// ============================================================
+//  Web sessions
+// ============================================================
+#define SESSION_MAX             4
+#define SESSION_IDLE_MS         (30UL * 60UL * 1000UL)
+#define SESSION_ABS_MS          (12UL * 60UL * 60UL * 1000UL)
+#define LOGIN_MAX_FAILS         5
+#define LOGIN_LOCK_MS           60000UL
+#define PASSWORD_MIN_LEN        8
 
 // ============================================================
 //  Timing
@@ -77,7 +111,7 @@
 #define MQTT_BASE_TOPIC     "elementiq"
 #define HA_DISCOVERY_PREFIX "homeassistant"
 #define HTTP_PORT           80
-#define FIRMWARE_VERSION    "v1.0.1.16"
+#define FIRMWARE_VERSION    "v1.0.1.17"
 // Must appear in every official .bin — web/GitHub OTA rejects images without it
 #define OTA_PRODUCT_MARKER  "ElementIQ-FW"
 // ESP image chip_id for ESP32-C3 (see esp_image_format.h)

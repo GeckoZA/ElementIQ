@@ -42,20 +42,25 @@ const char* deviceSerial = deviceSerialBuf;
 #include "modules/api.inc"
 #include "modules/web_ui.inc"
 #include "modules/portal.inc"
+#include "modules/system.inc"   // watchdog, safe restart, OTA boot guard, status LED (uses state from all modules above)
 
 void setup() {
+  pinMode(RELAY_PIN, OUTPUT); digitalWrite(RELAY_PIN, LOW);   // relay OFF first, before anything can delay us
   Serial.begin(115200);
 #if ARDUINO_USB_CDC_ON_BOOT
   delay(800);   // allow USB CDC to enumerate before first prints
 #endif
   eqLogf("=== ElementIQ Controller %s  S/N %s ===", FIRMWARE_VERSION, deviceSerial);
+  // Relay OFF before anything else (and again after every reset); the heater
+  // interlock keeps it off for BOOT_HEATER_HOLD_MS even if the thermostat asks for heat.
   pinMode(RELAY_PIN, OUTPUT); digitalWrite(RELAY_PIN, LOW);
-  pinMode(LED_PIN, OUTPUT); digitalWrite(LED_PIN, HIGH);
+  statusLedBegin();
   if (!initializeStateMutex()) {
     Serial.println("[STATE] mutex allocation failed; rebooting");
     ESP.restart();
     return;
   }
+  bootGuardBegin();   // OTA crash-loop detection / rollback (reads NVS; relay is already LOW)
   checkFactoryResetPin();
 
   if (!LittleFS.begin(true)) Serial.println("[FS] mount/format failed");
@@ -83,6 +88,7 @@ void setup() {
   topicAvail = topicBase + "/status";
 
   loadSettings();
+  loadSetupDone();
   if (!initializePortalQueue() || !initializeOtaWorker()) {
     Serial.println("[INIT] worker queue/task allocation failed; rebooting");
     ESP.restart();
@@ -93,13 +99,17 @@ void setup() {
   setupPortalRoutes();
   setupWiFi();
   server.begin();
+  watchdogBegin();    // from here on loop() must keep feeding the watchdog
 }
 
 void loop() {
+  watchdogFeed();
   processWifiManager();
   processPendingNetworkChanges();
   processPendingSystemActions();
+#if ENABLE_ARDUINO_OTA
   if (arduinoOtaReady) ArduinoOTA.handle();
+#endif
   mqttLoop();
   retryAdsInitialization();
   {
@@ -107,10 +117,9 @@ void loop() {
     updateRuntimeTick();
   }
 
-  if (millis() - lastLedCheck >= WIFI_LED_UPDATE_MS) {
-    lastLedCheck = millis();
-    updateWifiLed();
-  }
+  statusLedUpdate();
+  dangerButtonPoll();
+  bootGuardLoop();
 
   // Refresh clock often so the UI is not stuck on --:-- waiting for sensor interval
   {

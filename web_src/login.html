@@ -1,0 +1,28 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ElementIQ – Sign in</title><style>
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;background:#05080f;color:#e8f0fa;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#0a1628;border-radius:16px;padding:28px 24px;width:100%;max-width:380px}
+img{display:block;height:48px;margin:0 auto 8px}h1{color:#3b9eff;text-align:center;margin:0 0 4px;font-size:1.5rem}
+.hint{font-size:.8rem;color:#6b8aad;text-align:center;margin:0 0 6px}
+label{display:block;font-size:.72rem;color:#6b8aad;margin:16px 0 6px}
+input{width:100%;padding:13px;border-radius:10px;border:1px solid #123050;background:#0e243f;color:#e8f0fa;font-size:1rem}
+button{width:100%;margin-top:22px;padding:14px;border:none;border-radius:12px;background:#1e6bb8;color:#fff;font-weight:700;font-size:1rem;cursor:pointer}
+button:disabled{opacity:.6}.err{color:#f87171;font-size:.85rem;text-align:center;min-height:1.2em;margin:12px 0 0}
+</style></head><body><form class="card" id="f"><img src="/logo.png" alt="" onerror="this.style.display='none'"><h1>ElementIQ</h1><p class="hint">Sign in to manage your water heater</p>
+<label for="u">Username</label><input id="u" name="username" autocomplete="username" autocapitalize="none" value="admin">
+<label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password" autofocus>
+<button id="b" type="submit">Sign in</button><p class="err" id="e"></p></form>
+<script>
+document.getElementById('f').addEventListener('submit',async function(ev){
+ ev.preventDefault();
+ var b=document.getElementById('b'),e=document.getElementById('e');
+ b.disabled=true;e.textContent='';
+ try{
+  var r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-EIQ-CSRF':'login'},
+   body:JSON.stringify({user:document.getElementById('u').value,pass:document.getElementById('p').value})});
+  var d={};try{d=await r.json()}catch(_){}
+  if(r.ok){var n=new URLSearchParams(location.search).get('next');location.href=(n&&n[0]==='/'&&n[1]!=='/')?n:'/';return}
+  e.textContent=d.error||('Sign-in failed ('+r.status+')');
+ }catch(x){e.textContent='Cannot reach the device'}
+ b.disabled=false;document.getElementById('p').value='';document.getElementById('p').focus();
+});
+</script></body></html>

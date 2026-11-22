@@ -8,6 +8,8 @@ bool scanInProgress = false;
 bool scanRequested = false;
 bool stationConnecting = false;
 bool stationWasOnline = false;
+bool setupFinishPending = false;
+unsigned long apShutdownAt = 0;
 unsigned long stationConnectStartedAt = 0;
 unsigned long lastScanStartedAt = 0;
 unsigned long nextStationRetryAt = 0;
@@ -19,6 +21,7 @@ struct WifiConnectRequest {
   char password[65];
   char apPassword[32];
   bool updateApPassword;
+  bool finishSetup;     // first-time wizard: mark setup complete once Wi-Fi is up
 };
 
 // Blocking scan is far more reliable on ESP32 in AP+STA when STA is not
@@ -123,17 +126,9 @@ static void sendPortalHtml(AsyncWebServerRequest *req) {
 }
 
 
-// Captive-portal routes remain available during first-time Wi-Fi setup.
-// Outside setup mode, they follow the optional web-login setting like the rest
-// of the management interface.
-static bool requirePortalAccess(AsyncWebServerRequest* req) {
-  bool captive;
-  {
-    StateGuard guard;
-    captive = portalActive;
-  }
-  return captive || requireWebAuth(req);
-}
+// Captive-portal routes (/scan, /connect, /portal-status) are open ONLY while the
+// first-time setup wizard has not been completed; afterwards they need a login
+// (see requirePortalAccess() in api.inc).
 
 void setupPortalRoutes() {
   // Lightweight status for the captive-portal connect screen
@@ -176,17 +171,58 @@ void setupPortalRoutes() {
       ? req->getParam("pass", true)->value() : "";
     String apPassword = req->hasParam("ap_pass", true)
       ? req->getParam("ap_pass", true)->value() : "";
+    bool wizard = !setupDone;
     if (ssid.length() == 0 || ssid.length() > 32 || password.length() > 64 ||
         apPassword.length() > 31 ||
-        (apPassword.length() > 0 && apPassword.length() < 8)) {
-      req->send(400, "text/plain", "Invalid network or AP password");
+        (apPassword.length() > 0 && apPassword.length() < PASSWORD_MIN_LEN)) {
+      req->send(400, "text/plain", "Invalid network or hotspot password");
       return;
     }
+    if (!wizard && !requireDangerAuth(req)) return;   // changing Wi-Fi on a password-less unit needs the BOOT button
+    if (wizard) {
+      // First-time setup: password protection is ON unless the user explicitly opted out ("secure=0").
+      bool secure = !(req->hasParam("secure", true) && req->getParam("secure", true)->value() == "0");
+      String adminUser = req->hasParam("admin_user", true) ? req->getParam("admin_user", true)->value() : "admin";
+      String adminPass = req->hasParam("admin_pass", true) ? req->getParam("admin_pass", true)->value() : "";
+      String tzText = req->hasParam("tz", true) ? req->getParam("tz", true)->value() : "";
+      adminUser.trim();
+      if (secure && (adminUser.length() == 0 || adminUser.length() >= sizeof(webAuthUser))) {
+        req->send(400, "text/plain", "Choose a username (max 23 characters)");
+        return;
+      }
+      if (secure && (adminPass.length() < PASSWORD_MIN_LEN || adminPass.length() > 31)) {
+        req->send(400, "text/plain", "Device password must be 8-31 characters");
+        return;
+      }
+      if (apPassword.length() < PASSWORD_MIN_LEN) {
+        req->send(400, "text/plain", "Hotspot password must be 8-31 characters");
+        return;
+      }
+      {
+        StateGuard guard;
+        if (secure) {
+          strlcpy(webAuthUser, adminUser.c_str(), sizeof(webAuthUser));
+          setAdminPassword(adminPass.c_str());
+          saveWebAuth();
+        } else {
+          webAuthHash[0] = 0;                  // open mode: no login (CSRF + BOOT-button guards remain)
+          webAuthSalt[0] = 0;
+          LittleFS.remove("/webauth.txt");
+          eqLog("[SETUP] password protection skipped by user (open mode)");
+        }
+        if (tzText.length()) tzOffsetHours = constrain(tzText.toInt(), -12, 14);
+        bool keepAp = req->hasParam("ap_keep", true) && req->getParam("ap_keep", true)->value() == "1";
+        apEnabled = keepAp;
+        hideAp = !keepAp;
+        saveSettings();
+      }
+    }
     WifiConnectRequest command = {};
+    command.finishSetup = wizard;
     strlcpy(command.ssid, ssid.c_str(), sizeof(command.ssid));
     strlcpy(command.password, password.c_str(), sizeof(command.password));
     strlcpy(command.apPassword, apPassword.c_str(), sizeof(command.apPassword));
-    command.updateApPassword = req->hasParam("ap_pass", true);
+    command.updateApPassword = req->hasParam("ap_pass", true) && apPassword.length() > 0;
     if (!portalConnectQueue ||
         xQueueSend(portalConnectQueue, &command, 0) != pdTRUE) {
       req->send(503, "text/plain", "Connection request is already pending");
@@ -197,12 +233,7 @@ void setupPortalRoutes() {
   // Captive-portal probe URLs used by Android / Windows / iOS / macOS.
   // Serve the portal page (or a tiny success page) so the OS shows "Sign in".
   auto servePortalOrRedirect = [](AsyncWebServerRequest *req) {
-    bool captive;
-    {
-      StateGuard guard;
-      captive = portalActive;
-    }
-    if (captive) {
+    if (!setupDone) {
       sendPortalHtml(req);
     } else {
       req->redirect("http://192.168.4.1/");
@@ -214,12 +245,7 @@ void setupPortalRoutes() {
   server.on("/hotspot-detect.html", HTTP_GET, servePortalOrRedirect);   // iOS / macOS
   server.on("/library/test/success.html", HTTP_GET, servePortalOrRedirect);
   server.on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest *req) {     // Windows NCSI
-    bool captive;
-    {
-      StateGuard guard;
-      captive = portalActive;
-    }
-    if (captive) sendPortalHtml(req);
+    if (!setupDone) sendPortalHtml(req);
     else req->send(200, "text/plain", "Microsoft NCSI");
   });
   server.on("/connecttest.txt", HTTP_GET, servePortalOrRedirect);       // Windows
@@ -228,12 +254,7 @@ void setupPortalRoutes() {
   server.on("/success.txt", HTTP_GET, servePortalOrRedirect);
 
   server.onNotFound([](AsyncWebServerRequest *req) {
-    bool captive;
-    {
-      StateGuard guard;
-      captive = portalActive;
-    }
-    if (captive) {
+    if (!setupDone) {
       // Prefer serving the page directly – more reliable than redirect alone
       sendPortalHtml(req);
     } else {
@@ -241,12 +262,7 @@ void setupPortalRoutes() {
     }
   });
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-    bool captive;
-    {
-      StateGuard guard;
-      captive = portalActive;
-    }
-    if (captive) sendPortalHtml(req);
+    if (!setupDone) sendPortalHtml(req);
     else sendPage(req, "home", nullptr);
   });
 }
@@ -365,6 +381,12 @@ void startCaptivePortal() {
 
 void setupWiFi() {
   WiFi.setAutoReconnect(false);
+  WiFi.persistent(false);  // never write STA credentials from this firmware path
+  // After factory reset (or first boot) ensure no residual STA association fights the AP.
+  if (!setupDone) {
+    WiFi.disconnect(true, true);
+    delay(100);
+  }
   startCaptivePortal();
   char ssid[sizeof(wifi_ssid)];
   char password[sizeof(wifi_pass)];
@@ -394,9 +416,17 @@ void processWifiManager() {
         strlcpy(apPass, command.apPassword, sizeof(apPass));
         saveSettings();
       }
-      configureAccessPoint(true);
+      // During first-time setup do NOT restart the hotspot now: that would drop the
+      // phone mid-wizard. The new password takes effect the next time the AP starts.
+      if (setupDone) configureAccessPoint(true);
     }
+    setupFinishPending = command.finishSetup;
     beginStationConnection(command.ssid, command.password);
+  }
+
+  if (apShutdownAt && (int32_t)(millis() - apShutdownAt) >= 0) {
+    apShutdownAt = 0;
+    if (WiFi.status() == WL_CONNECTED) configureAccessPoint(false);
   }
 
   wl_status_t status = WiFi.status();
@@ -418,12 +448,21 @@ void processWifiManager() {
     }
     setupNTP();
     setupMDNS();
-    configureAccessPoint(false);
+    if (setupFinishPending) {
+      setupFinishPending = false;
+      markSetupDone();
+      // Keep the hotspot up briefly so the wizard page can show the success screen.
+      apShutdownAt = millis() + 45000UL;
+      eqLog("[SETUP] first-time setup complete");
+    } else {
+      configureAccessPoint(false);
+    }
+#if ENABLE_ARDUINO_OTA
     if (!arduinoOtaReady) {
       setupArduinoOTA();
       arduinoOtaReady = true;
     }
-    updateWifiLed();
+#endif
     bool autoUpdate;
     {
       StateGuard guard;
@@ -500,15 +539,15 @@ void processPendingSystemActions() {
   }
   if (resetWifi) {
     setHeater(false, true);
-    WiFi.disconnect(true);
-    ESP.restart();
+    WiFi.disconnect(true, true);  // erase stored credentials
+    safeRestart();
   }
   if (reboot) {
     // Heater off first, then let the HTTP response flush before restarting.
     setHeater(false, true);
     saveRuntimeStats();
-    delay(500);
-    ESP.restart();
+    delay(1000);          // let the HTTP response (e.g. after a firmware upload) reach the browser
+    safeRestart();
   }
 }
 
@@ -518,7 +557,17 @@ void checkFactoryResetPin() {
   Serial.println("[RESET] Hold BOOT 5s for factory reset...");
   unsigned long t0 = millis();
   while (digitalRead(FACTORY_RESET_PIN) == LOW) {
-    if (millis() - t0 > 5000) { factoryReset(); return; }
+    if (millis() - t0 > 5000) {
+      // Wait for release so the post-reset boot does not immediately re-trigger
+      // (which would leave the device stuck in a reset loop with no AP).
+      Serial.println("[RESET] Release BOOT button to complete factory reset...");
+      while (digitalRead(FACTORY_RESET_PIN) == LOW) {
+        delay(50);
+      }
+      delay(100);  // debounce
+      factoryReset();
+      return;
+    }
     delay(50);
   }
 }

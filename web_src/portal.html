@@ -1,0 +1,132 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ElementIQ Setup</title><style>
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;background:#05080f;color:#e8f0fa;margin:0;padding:16px}
+.card{background:#0a1628;border-radius:16px;padding:22px 20px;max-width:420px;margin:0 auto}
+h1{color:#3b9eff;text-align:center;margin:0 0 4px;font-size:1.45rem}h2{margin:0 0 4px;font-size:1.15rem}
+.hint{font-size:.8rem;color:#6b8aad;margin:6px 0}.c{text-align:center}
+label{display:block;font-size:.72rem;color:#6b8aad;margin:14px 0 6px}
+input,select{width:100%;padding:12px;border-radius:10px;border:1px solid #123050;background:#0e243f;color:#e8f0fa;font-size:1rem}
+button{width:100%;margin-top:18px;padding:14px;border:none;border-radius:12px;background:#1e6bb8;color:#fff;font-weight:700;font-size:1rem;cursor:pointer}
+button.sec{background:#12263f;color:#9bb4d0;margin-top:10px}button:disabled{opacity:.5}
+.dots{display:flex;justify-content:center;gap:7px;margin:10px 0 18px}.dots i{width:8px;height:8px;border-radius:50%;background:#173152}.dots i.on{background:#3b9eff}
+.net{display:flex;justify-content:space-between;align-items:center;width:100%;margin:0 0 8px;padding:12px 14px;background:#0e243f;border:1px solid #123050;border-radius:10px;color:#e8f0fa;font-weight:500;text-align:left}
+.net.sel{border-color:#3b9eff;background:#12335a}.net small{color:#6b8aad;font-weight:400}
+.err{color:#f87171;font-size:.85rem;min-height:1.1em;margin:10px 0 0}.ok{color:#22c55e}
+.box{background:#0e243f;border-radius:12px;padding:12px 14px;margin:12px 0;font-size:.92rem;line-height:1.8}.box b{color:#fff}
+.row{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:.9rem}.row input{width:auto}
+.spin{width:34px;height:34px;border:4px solid #173152;border-top-color:#3b9eff;border-radius:50%;margin:18px auto;animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}
+.step{display:none}.step.on{display:block}
+</style></head><body><div class="card"><h1>ElementIQ</h1><div class="dots" id="dots"></div>
+
+<div class="step on" id="s0"><h2 class="c">Welcome</h2><p class="hint c">Let's get your water heater controller online. This takes about two minutes and you'll need your home Wi‑Fi password.</p>
+<div class="box">1. Connect to your Wi‑Fi<br>2. Protect the controller with a password<br>3. Confirm your time zone</div>
+<button onclick="go(1)">Get started</button></div>
+
+<div class="step" id="s1"><h2>Choose your Wi‑Fi</h2><p class="hint">Pick your home network. Only 2.4 GHz networks are supported.</p>
+<div id="nets"><p class="hint">Looking for networks…</p></div>
+<button class="sec" onclick="other()">My network isn't listed</button>
+<div id="man" style="display:none"><label>Network name</label><input id="mssid" maxlength="32" autocapitalize="none" oninput="S.ssid=this.value;S.open=false"></div>
+<label>Wi‑Fi password</label><input type="password" id="wpass" maxlength="64" autocomplete="off" oninput="S.pass=this.value">
+<div class="row"><input type="checkbox" id="sh1" onchange="sh('wpass',this.checked)"><label for="sh1" style="margin:0;font-size:.85rem;color:#9bb4d0">Show password</label></div>
+<p class="err" id="e1"></p><button onclick="v1()">Next</button><button class="sec" onclick="go(0)">Back</button></div>
+
+<div class="step" id="s2"><h2>Secure your controller</h2><p class="hint">A password keeps other people and devices on your Wi‑Fi out of your heater settings.</p>
+<div class="row"><input type="checkbox" id="sec" checked onchange="secChg()"><label for="sec" style="margin:0;font-size:.9rem;color:#e8f0fa"><b>Protect with a password</b> (recommended)</label></div>
+<div id="secbox"><label>Your username</label><input id="au" maxlength="23" value="admin" autocapitalize="none" autocomplete="username">
+<label>Controller password (8–31 characters)</label><input type="password" id="ap" maxlength="31" autocomplete="new-password">
+<label>Repeat password</label><input type="password" id="ap2" maxlength="31" autocomplete="new-password"></div>
+<div class="box" id="secwarn" style="display:none;color:#fbbf24;font-size:.85rem;line-height:1.5">Without a password, anyone on your home Wi‑Fi can change your heater settings. To update firmware, factory reset or change Wi‑Fi you will have to hold the BOOT button on the controller for 3 seconds. You can add a password later in Settings.</div>
+<label>Controller hotspot password (8–31 characters)</label><input type="password" id="hp" maxlength="31" autocomplete="new-password">
+<p class="hint">The hotspot is the controller's own Wi‑Fi. It is only needed if your home Wi‑Fi is down or changes.</p>
+<div class="row"><input type="checkbox" id="keep"><label for="keep" style="margin:0;font-size:.85rem;color:#9bb4d0">Keep the hotspot on all the time (not recommended)</label></div>
+<p class="err" id="e2"></p><button onclick="v2()">Next</button><button class="sec" onclick="go(1)">Back</button></div>
+
+<div class="step" id="s3"><h2>Time zone</h2><p class="hint">Used for your heating schedule. We detected this from your phone:</p>
+<div class="box c"><b id="tzname">…</b><br><span id="tzoff"></span></div>
+<label>Change if wrong</label><select id="tz"></select><p class="hint" id="tzwarn"></p>
+<button onclick="go(4)">Next</button><button class="sec" onclick="go(2)">Back</button></div>
+
+<div class="step" id="s4"><h2>Ready to connect</h2><p class="hint">Check these details, then finish.</p>
+<div class="box" id="sum"></div>
+<p class="hint">Water pressure and leak sensors can be plugged in later — they will show up on the Home page automatically.</p>
+<p class="err" id="e4"></p><button onclick="finish()">Finish setup</button><button class="sec" onclick="go(3)">Back</button></div>
+
+<div class="step" id="s5"><h2 class="c">Connecting…</h2><div class="spin"></div><p class="hint c" id="cmsg">Joining your Wi‑Fi. Keep this page open.</p></div>
+
+<div class="step" id="s6"></div>
+</div>
+<script>
+var S={ssid:'',pass:'',open:false,tz:0},step=0,H={'X-EIQ-CSRF':'setup'};
+function $(i){return document.getElementById(i)}
+function esc(t){return String(t).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function sh(i,on){$(i).type=on?'text':'password'}
+(function(){var d=$('dots');for(var i=0;i<5;i++)d.innerHTML+='<i></i>';})();
+function go(n){step=n;document.querySelectorAll('.step').forEach(function(e,i){e.classList.toggle('on',i===n)});
+ document.querySelectorAll('#dots i').forEach(function(e,i){e.classList.toggle('on',i<=Math.min(n,4))});
+ if(n===4)summary();window.scrollTo(0,0)}
+// ---- step 1: Wi-Fi ----
+function bars(r){return r>-55?'▂▄▆█':r>-67?'▂▄▆':r>-78?'▂▄':'▂'}
+async function scan(){
+ if(step!==1)return;
+ try{var a=await(await fetch('/scan')).json(),b=$('nets');
+  if(!a.length){b.innerHTML='<p class="hint">Looking for networks…</p>';return}
+  b.innerHTML='';a.forEach(function(n){var x=document.createElement('button');x.type='button';
+   x.className='net'+(n.ssid===S.ssid?' sel':'');
+   x.innerHTML='<span>'+esc(n.ssid)+'</span><small>'+(n.secure?'🔒 ':'')+bars(n.rssi)+'</small>';
+   x.onclick=function(){S.ssid=n.ssid;S.open=!n.secure;$('man').style.display='none';
+    document.querySelectorAll('.net').forEach(function(y){y.classList.remove('sel')});x.classList.add('sel')};
+   b.appendChild(x)})
+ }catch(e){}}
+setInterval(scan,3000);scan();
+function other(){$('man').style.display='block';S.ssid='';S.open=false;$('mssid').focus();
+ document.querySelectorAll('.net').forEach(function(y){y.classList.remove('sel')})}
+function v1(){var e=$('e1');e.textContent='';
+ if(!S.ssid){e.textContent='Choose your network first';return}
+ if(!S.open&&S.pass.length<8&&S.pass.length>0){e.textContent='Wi‑Fi passwords are at least 8 characters';return}
+ if(!S.open&&!S.pass){e.textContent='Enter your Wi‑Fi password';return}
+ go(2)}
+// ---- step 2: security ----
+function secChg(){var on=$('sec').checked;$('secbox').style.display=on?'block':'none';$('secwarn').style.display=on?'none':'block'}
+function v2(){var e=$('e2');e.textContent='';
+ var u=$('au').value.trim(),p=$('ap').value,h=$('hp').value,sec=$('sec').checked;
+ if(sec){
+  if(!u){e.textContent='Choose a username';return}
+  if(p.length<8){e.textContent='Controller password must be at least 8 characters';return}
+  if(p!==$('ap2').value){e.textContent='The two passwords do not match';return}
+ }
+ if(h.length<8){e.textContent='Hotspot password must be at least 8 characters';return}
+ if(sec&&h===p){e.textContent='Use a different hotspot password';return}
+ go(3)}
+// ---- step 3: time zone (auto-detected from this browser) ----
+(function(){
+ var z='',off=-new Date().getTimezoneOffset()/60;
+ try{z=Intl.DateTimeFormat().resolvedOptions().timeZone||''}catch(e){}
+ var r=Math.round(off);S.tz=r;
+ function fmt(h){return 'UTC'+(h>=0?'+':'−')+Math.abs(h)}
+ $('tzname').textContent=z||'Your current time zone';$('tzoff').textContent=fmt(r);
+ if(r!==off)$('tzwarn').textContent='Your zone is '+off+' h from UTC; this controller uses whole hours, so it will be up to 30 minutes out.';
+ var s=$('tz');for(var h=-12;h<=14;h++){var o=document.createElement('option');o.value=h;o.textContent=fmt(h);if(h===r)o.selected=true;s.appendChild(o)}
+ s.onchange=function(){S.tz=+s.value;$('tzoff').textContent=fmt(S.tz)}
+})();
+// ---- step 4: review + connect ----
+function summary(){$('sum').innerHTML='Wi‑Fi: <b>'+esc(S.ssid)+'</b><br>Login: <b>'+($('sec').checked?esc($('au').value.trim()):'no password')+'</b><br>Hotspot: <b>'+($('keep').checked?'always on':'only if Wi‑Fi is down')+'</b><br>Time zone: <b>UTC'+(S.tz>=0?'+':'−')+Math.abs(S.tz)+'</b>'}
+async function finish(){
+ $('e4').textContent='';
+ var u=$('au').value.trim(),p=new URLSearchParams({ssid:S.ssid,pass:S.pass,ap_pass:$('hp').value,secure:$('sec').checked?'1':'0',admin_user:u,admin_pass:$('sec').checked?$('ap').value:'',tz:S.tz,ap_keep:$('keep').checked?'1':'0'});
+ go(5);
+ try{var r=await fetch('/connect',{method:'POST',headers:H,body:p});
+  if(!r.ok){go(4);$('e4').textContent=await r.text();return}
+ }catch(e){go(4);$('e4').textContent='Lost contact with the controller. Check you are still on its Wi‑Fi and try again.';return}
+ poll(Date.now(),$('sec').checked?u:'')}
+async function poll(t0,u){
+ var m=$('cmsg');
+ try{var d=await(await fetch('/portal-status')).json(),ip=d.ip||'';
+  if(ip&&ip!=='0.0.0.0'&&ip.indexOf('192.168.4.')!==0){done(ip,d.mdns||'ElementIQ.local',u);return}
+  m.textContent=(Date.now()-t0>35000)?'':'Joining your Wi‑Fi… '+Math.round((Date.now()-t0)/1000)+' s';
+  if(!d.wifi_connecting&&Date.now()-t0>35000){fail();return}
+ }catch(e){m.textContent='Waiting for the controller…';if(Date.now()-t0>60000){fail();return}}
+ setTimeout(function(){poll(t0,u)},1000)}
+function fail(){go(6);$('s6').innerHTML='<h2 class="c" style="color:#f87171">Couldn\'t join Wi‑Fi</h2><p class="hint c">Check the Wi‑Fi password for <b>'+esc(S.ssid)+'</b> and that it is a 2.4 GHz network.</p><button onclick="go(1)">Try again</button>'}
+function done(ip,mdns,u){go(6);$('s6').innerHTML='<h2 class="c ok">You\'re all set!</h2><p class="hint c">ElementIQ joined <b>'+esc(S.ssid)+'</b>.</p>'+
+ '<div class="box"><b>Next:</b><br>1. Reconnect your phone to <b>'+esc(S.ssid)+'</b><br>2. Open <b>http://'+esc(mdns)+'</b> (or <b>http://'+esc(ip)+'</b>)<br>'+(u?'3. Sign in as <b>'+esc(u)+'</b>':'3. No password is set — add one any time in Settings → Web security')+'</div>'+
+ '<p class="hint c">If the ElementIQ hotspot disappears in a moment, that is normal.</p>'}
+</script></body></html>

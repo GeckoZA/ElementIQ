@@ -25,6 +25,14 @@ void setupWebUI() {
     }
   });
 
+  server.on("/login", HTTP_GET, [](AsyncWebServerRequest *req) {
+    if (!setupDone || !adminPasswordSet()) { req->redirect("/"); return; }
+    AsyncWebServerResponse *res = req->beginResponse(200, "text/html", GZ_PAGE_LOGIN, GZ_PAGE_LOGIN_LEN);
+    res->addHeader("Content-Encoding", "gzip");
+    res->addHeader("Cache-Control", "no-store");
+    req->send(res);
+  });
+
   server.on("/connections", HTTP_GET, [](AsyncWebServerRequest *req) {
     sendGzPage(req, GZ_PAGE_CONNECTIONS, GZ_PAGE_CONNECTIONS_LEN);
   });
