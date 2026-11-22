@@ -119,13 +119,25 @@ async function finish(){
  poll(Date.now(),$('sec').checked?u:'')}
 async function poll(t0,u){
  var m=$('cmsg');
- try{var d=await(await fetch('/portal-status')).json(),ip=d.ip||'';
-  if(ip&&ip!=='0.0.0.0'&&ip.indexOf('192.168.4.')!==0){done(ip,d.mdns||'ElementIQ.local',u);return}
-  m.textContent=(Date.now()-t0>35000)?'':'Joining your Wi‑Fi… '+Math.round((Date.now()-t0)/1000)+' s';
-  if(!d.wifi_connecting&&Date.now()-t0>35000){fail();return}
- }catch(e){m.textContent='Waiting for the controller…';if(Date.now()-t0>60000){fail();return}}
- setTimeout(function(){poll(t0,u)},1000)}
-function fail(){go(6);$('s6').innerHTML='<h2 class="c" style="color:#f87171">Couldn\'t join Wi‑Fi</h2><p class="hint c">Check the Wi‑Fi password for <b>'+esc(S.ssid)+'</b> and that it is a 2.4 GHz network.</p><button onclick="go(1)">Try again</button>'}
+ var elapsed=Date.now()-t0;
+ try{
+  var d=await(await fetch('/portal-status',{cache:'no-store'})).json();
+  var ip=d.ip||'';
+  // joined flag from firmware, or STA IP that is not the softAP range (wifi_status 3 = WL_CONNECTED)
+  var ok=!!d.joined||(!!ip&&ip!=='0.0.0.0'&&ip.indexOf('192.168.4.')!==0&&d.wifi_status===3);
+  if(ok){done(ip,d.mdns||'ElementIQ.local',u);return}
+  if(elapsed<50000)m.textContent='Joining your Wi‑Fi… '+Math.round(elapsed/1000)+' s';
+  else m.textContent='Still trying… check the password if this continues';
+  // Fail only when controller stopped trying and never joined (connect timeout is 30 s)
+  if(!d.wifi_connecting&&!d.joined&&elapsed>45000){fail();return}
+ }catch(e){
+  // Brief loss of contact is common when the radio switches to AP+STA — keep waiting.
+  m.textContent='Waiting for the controller…';
+  if(elapsed>90000){fail();return}
+ }
+ setTimeout(function(){poll(t0,u)},800)
+}
+function fail(){go(6);$('s6').innerHTML='<h2 class="c" style="color:#f87171">Couldn\'t join Wi‑Fi</h2><p class="hint c">Check the Wi‑Fi password for <b>'+esc(S.ssid)+'</b> and that it is a 2.4 GHz network. If the controller later shows online, reconnect to <b>'+esc(S.ssid)+'</b> and open <b>http://ElementIQ.local</b>.</p><button onclick="go(1)">Try again</button>'}
 function done(ip,mdns,u){go(6);$('s6').innerHTML='<h2 class="c ok">You\'re all set!</h2><p class="hint c">ElementIQ joined <b>'+esc(S.ssid)+'</b>.</p>'+
  '<div class="box"><b>Next:</b><br>1. Reconnect your phone to <b>'+esc(S.ssid)+'</b><br>2. Open <b>http://'+esc(mdns)+'</b> (or <b>http://'+esc(ip)+'</b>)<br>'+(u?'3. Sign in as <b>'+esc(u)+'</b>':'3. No password is set — add one any time in Settings → Web security')+'</div>'+
  '<p class="hint c">If the ElementIQ hotspot disappears in a moment, that is normal.</p>'}

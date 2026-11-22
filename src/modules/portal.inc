@@ -134,14 +134,20 @@ void setupPortalRoutes() {
   // Lightweight status for the captive-portal connect screen
   server.on("/portal-status", HTTP_GET, [](AsyncWebServerRequest *req) {
     if (!requirePortalAccess(req)) return;
+    wl_status_t st = WiFi.status();
+    String staIp = WiFi.localIP().toString();
+    bool joined = (st == WL_CONNECTED) && staIp.length() && staIp != "0.0.0.0" &&
+                  !staIp.startsWith("192.168.4.");
     JsonDocument doc;
     doc["wifi_connecting"] = stationConnecting;
-    doc["wifi_status"] = (int)WiFi.status();
-    doc["ip"] = WiFi.localIP().toString();
+    doc["wifi_status"] = (int)st;
+    doc["ip"] = staIp;
     doc["ap_ip"] = WiFi.softAPIP().toString();
-    doc["ssid"] = candidateSsid;
+    doc["ssid"] = candidateSsid[0] ? candidateSsid : wifi_ssid;
     doc["mdns"] = "ElementIQ.local";
     doc["rssi"] = WiFi.RSSI();
+    doc["joined"] = joined;
+    doc["setup_done"] = setupDone;
     String json;
     serializeJson(doc, json);
     req->send(200, "application/json", json);
@@ -230,29 +236,35 @@ void setupPortalRoutes() {
     }
     req->send(202, "text/plain", "Connecting");
   });
-  // Captive-portal probe URLs used by Android / Windows / iOS / macOS.
-  // Serve the portal page (or a tiny success page) so the OS shows "Sign in".
-  auto servePortalOrRedirect = [](AsyncWebServerRequest *req) {
+  // Captive-portal probe URLs used by Android / Windows / iOS / macOS / Chrome OS.
+  // Strategy: 302 → http://192.168.4.1/ for connectivity checks (triggers OS "Sign in"
+  // banner reliably), and always serve the portal HTML for unknown hosts via onNotFound.
+  auto captiveRedirect = [](AsyncWebServerRequest *req) {
     if (!setupDone) {
-      sendPortalHtml(req);
+      // Absolute URL so the client leaves the probe hostname and hits our AP IP.
+      AsyncWebServerResponse *res = req->beginResponse(302, "text/plain", "");
+      res->addHeader("Location", "http://192.168.4.1/");
+      res->addHeader("Cache-Control", "no-store");
+      req->send(res);
     } else {
-      req->redirect("http://192.168.4.1/");
+      req->send(204);
     }
   };
 
-  server.on("/generate_204", HTTP_GET, servePortalOrRedirect);          // Android
-  server.on("/gen_204", HTTP_GET, servePortalOrRedirect);               // Android
-  server.on("/hotspot-detect.html", HTTP_GET, servePortalOrRedirect);   // iOS / macOS
-  server.on("/library/test/success.html", HTTP_GET, servePortalOrRedirect);
-  server.on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest *req) {     // Windows NCSI
-    if (!setupDone) sendPortalHtml(req);
-    else req->send(200, "text/plain", "Microsoft NCSI");
-  });
-  server.on("/connecttest.txt", HTTP_GET, servePortalOrRedirect);       // Windows
-  server.on("/redirect", HTTP_GET, servePortalOrRedirect);
-  server.on("/canonical.html", HTTP_GET, servePortalOrRedirect);
-  server.on("/success.txt", HTTP_GET, servePortalOrRedirect);
+  server.on("/generate_204", HTTP_GET, captiveRedirect);                // Android
+  server.on("/gen_204", HTTP_GET, captiveRedirect);                     // Android
+  server.on("/generate204", HTTP_GET, captiveRedirect);
+  server.on("/hotspot-detect.html", HTTP_GET, captiveRedirect);         // iOS / macOS
+  server.on("/library/test/success.html", HTTP_GET, captiveRedirect);
+  server.on("/ncsi.txt", HTTP_GET, captiveRedirect);                    // Windows NCSI
+  server.on("/connecttest.txt", HTTP_GET, captiveRedirect);             // Windows
+  server.on("/redirect", HTTP_GET, captiveRedirect);
+  server.on("/canonical.html", HTTP_GET, captiveRedirect);
+  server.on("/success.txt", HTTP_GET, captiveRedirect);
+  server.on("/check_network_status.txt", HTTP_GET, captiveRedirect);    // Huawei / others
+  server.on("/kindle-wifi/wifiredirect.html", HTTP_GET, captiveRedirect);
 
+  // Any other path/host (DNS wildcard → 192.168.4.1) serves the portal during setup.
   server.onNotFound([](AsyncWebServerRequest *req) {
     if (!setupDone) {
       // Prefer serving the page directly – more reliable than redirect alone
@@ -262,9 +274,29 @@ void setupPortalRoutes() {
     }
   });
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-    if (!setupDone) sendPortalHtml(req);
-    else sendPage(req, "home", nullptr);
+    if (!setupDone) {
+      sendPortalHtml(req);
+    } else {
+      sendPage(req, "home", nullptr);
+    }
   });
+}
+
+static void restartDnsServer() {
+  if (dnsServerStarted) {
+    dnsServer.stop();
+    dnsServerStarted = false;
+  }
+  IPAddress apIP = WiFi.softAPIP();
+  if (apIP == IPAddress(0, 0, 0, 0)) {
+    apIP = IPAddress(192, 168, 4, 1);
+  }
+  // TTL 0 so clients do not cache a bad answer while the AP is settling.
+  dnsServer.setTTL(0);
+  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+  dnsServer.start(53, "*", apIP);
+  dnsServerStarted = true;
+  Serial.printf("[WiFi] DNS captive server on %s:53\n", apIP.toString().c_str());
 }
 
 void configureAccessPoint(bool forceForSetup) {
@@ -279,32 +311,48 @@ void configureAccessPoint(bool forceForSetup) {
   }
   bool stationUp = WiFi.status() == WL_CONNECTED;
   if (!enabled && stationUp && !forceForSetup) {
+    if (dnsServerStarted) {
+      dnsServer.stop();
+      dnsServerStarted = false;
+    }
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
     return;
   }
   if (!name[0]) strlcpy(name, AP_NAME, sizeof(name));
 
-  WiFi.mode(WIFI_AP_STA);
   WiFi.setSleep(false);  // better beacon reliability / visibility
+  WiFi.persistent(false);
 
-  // When bringing up the captive portal, clear any half-open STA state so
-  // subsequent scans work reliably (known AP+STA + disconnected STA issue).
-  if (forceForSetup && WiFi.status() != WL_CONNECTED) {
-    WiFi.disconnect(false);
+  // During first-time setup / captive portal, pure AP mode is more reliable than
+  // AP+STA (fewer radio races, DHCP and DNS answer faster, softAPIP is stable).
+  // Switch to AP_STA only when the user starts a station connection.
+  const bool pureAp = forceForSetup && !stationConnecting && WiFi.status() != WL_CONNECTED;
+  if (pureAp) {
+    WiFi.softAPdisconnect(true);
+    WiFi.disconnect(true, false);
+    delay(50);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+    WiFi.mode(WIFI_AP);
+    delay(100);
+  } else {
+    WiFi.mode(WIFI_AP_STA);
+    if (forceForSetup && WiFi.status() != WL_CONNECTED) {
+      WiFi.disconnect(false);
+    }
+    WiFi.softAPdisconnect(true);
+    delay(80);
   }
 
-  WiFi.softAPdisconnect(true);
-  delay(50);
-
-  // Explicit AP IP – some clients are picky if this is left default
   IPAddress apIP(192, 168, 4, 1);
   IPAddress gateway(192, 168, 4, 1);
   IPAddress subnet(255, 255, 255, 0);
+  // softAPConfig before softAP is the documented order on ESP32.
   WiFi.softAPConfig(apIP, gateway, subnet);
 
-  // Channel 6 is widely supported on Windows / Android / iOS.
-  // max 4 clients, open or WPA2 depending on password.
+  // Channel 1 is often quieter than 6 on crowded 2.4 GHz; both are universally supported.
+  // Prefer channel 6 (widely tested with Android captive detection).
   const int channel = 6;
   const int maxClients = 4;
   bool ok = false;
@@ -313,16 +361,37 @@ void configureAccessPoint(bool forceForSetup) {
   } else {
     ok = WiFi.softAP(name, nullptr, channel, /*ssid_hidden=*/0, maxClients);
   }
+
+  // Give the radio / DHCP server time before clients associate.
+  delay(200);
+
+  // Re-apply config after softAP — some ESP32-C3 cores ignore the first call.
+  WiFi.softAPConfig(apIP, gateway, subnet);
+  delay(50);
+
   if (!ok) {
     Serial.println("[WiFi] access point start failed");
   } else {
-    Serial.printf("[WiFi] AP \"%s\" up on channel %d  IP %s\n",
-                  name, channel, WiFi.softAPIP().toString().c_str());
+    IPAddress got = WiFi.softAPIP();
+    Serial.printf("[WiFi] AP \"%s\" up on channel %d  IP %s  mode=%s\n",
+                  name, channel, got.toString().c_str(),
+                  pureAp ? "AP" : "AP_STA");
+    if (got != apIP) {
+      Serial.println("[WiFi] softAPIP mismatch – retrying softAPConfig");
+      WiFi.softAPConfig(apIP, gateway, subnet);
+      delay(50);
+      Serial.printf("[WiFi] softAPIP now %s\n", WiFi.softAPIP().toString().c_str());
+    }
   }
 
 #if defined(WIFI_POWER_19_5dBm)
   WiFi.setTxPower(WIFI_POWER_19_5dBm);  // max TX where supported
 #endif
+
+  // Always (re)start the captive DNS after the AP is up so the answer IP is correct.
+  if (forceForSetup || portalActive) {
+    restartDnsServer();
+  }
 }
 
 void beginStationConnection(const char* ssid, const char* password) {
@@ -338,9 +407,11 @@ void beginStationConnection(const char* ssid, const char* password) {
   strlcpy(candidateSsid, ssid, sizeof(candidateSsid));
   strlcpy(candidatePass, password ? password : "", sizeof(candidatePass));
 
-  WiFi.mode(WIFI_AP_STA);
+  // Need AP+STA to keep the setup hotspot while joining home Wi-Fi.
   WiFi.setSleep(false);
   WiFi.persistent(false);
+  WiFi.mode(WIFI_AP_STA);
+  delay(50);
 
   // Clean slate for STA, keep AP running
   WiFi.disconnect(false);
@@ -357,10 +428,8 @@ void beginStationConnection(const char* ssid, const char* password) {
     StateGuard guard;
     portalActive = true;
   }
-  if (!dnsServerStarted) {
-    dnsServer.start(53, "*", WiFi.softAPIP());
-    dnsServerStarted = true;
-  }
+  // Keep captive DNS alive so the phone can still reach the portal during connect.
+  restartDnsServer();
 }
 
 void startCaptivePortal() {
@@ -368,15 +437,14 @@ void startCaptivePortal() {
     StateGuard guard;
     portalActive = true;
   }
-  configureAccessPoint(true);
-  if (!dnsServerStarted) {
-    dnsServer.start(53, "*", WiFi.softAPIP());
-    dnsServerStarted = true;
-  }
-  // Request a scan on the next loop iteration (after radio settle)
-  lastScanStartedAt = millis();
-  scanRequested = true;
-  Serial.println("[WiFi] captive portal started – scan requested");
+  configureAccessPoint(true);   // also (re)starts DNS
+  // Defer the first scan so clients can finish DHCP + captive probes first.
+  // Scanning the 2.4 GHz band briefly drops AP beacons and is a common reason
+  // phones show "connected, no internet" with no portal popup.
+  // First automatic scan ~4 s after AP is up (interval is 8 s thereafter).
+  lastScanStartedAt = millis() - (WIFI_SCAN_INTERVAL_MS > 4000 ? WIFI_SCAN_INTERVAL_MS - 4000 : 0);
+  scanRequested = false;
+  Serial.println("[WiFi] captive portal started (scan deferred ~4s)");
 }
 
 void setupWiFi() {
@@ -404,7 +472,11 @@ void processWifiManager() {
     StateGuard guard;
     captive = portalActive;
   }
-  if (captive) dnsServer.processNextRequest();
+  // Process several DNS queries per loop – phones fire many probes at once when
+  // joining the AP; a single processNextRequest() drops the rest.
+  if (captive && dnsServerStarted) {
+    for (int i = 0; i < 8; i++) dnsServer.processNextRequest();
+  }
   collectScanResults();
 
   WifiConnectRequest command;
@@ -426,7 +498,17 @@ void processWifiManager() {
 
   if (apShutdownAt && (int32_t)(millis() - apShutdownAt) >= 0) {
     apShutdownAt = 0;
+    setupPortalHold = false;   // portal routes now require normal auth
+    {
+      StateGuard guard;
+      portalActive = false;
+    }
+    if (dnsServerStarted) {
+      dnsServer.stop();
+      dnsServerStarted = false;
+    }
     if (WiFi.status() == WL_CONNECTED) configureAccessPoint(false);
+    eqLog("[SETUP] wizard grace ended — setup AP stopped");
   }
 
   wl_status_t status = WiFi.status();
@@ -437,24 +519,37 @@ void processWifiManager() {
       StateGuard guard;
       strlcpy(wifi_ssid, candidateSsid, sizeof(wifi_ssid));
       strlcpy(wifi_pass, candidatePass, sizeof(wifi_pass));
-      portalActive = false;
       saveSettings();
     }
     Serial.printf("[WiFi] Connected  IP: %s  SSID: %s\n",
                   WiFi.localIP().toString().c_str(), candidateSsid);
-    if (dnsServerStarted) {
-      dnsServer.stop();
-      dnsServerStarted = false;
-    }
     setupNTP();
     setupMDNS();
     if (setupFinishPending) {
+      // First-time wizard: STA is up. Mark setup complete, but keep the setup AP,
+      // captive DNS, and unauthenticated portal routes alive so the phone (still on
+      // ElementIQ-Setup) can poll /portal-status and show the success screen.
+      // Previously markSetupDone() immediately forced /portal-status to require a
+      // login session → 401 → UI "Couldn't join Wi-Fi" despite a successful join.
       setupFinishPending = false;
       markSetupDone();
-      // Keep the hotspot up briefly so the wizard page can show the success screen.
-      apShutdownAt = millis() + 45000UL;
-      eqLog("[SETUP] first-time setup complete");
+      setupPortalHold = true;   // requirePortalAccess stays open during grace
+      {
+        StateGuard guard;
+        portalActive = true;
+      }
+      if (!dnsServerStarted) restartDnsServer();
+      apShutdownAt = millis() + 60000UL;  // 60 s for the success page
+      eqLog("[SETUP] first-time setup complete — AP held for wizard success page");
     } else {
+      {
+        StateGuard guard;
+        portalActive = false;
+      }
+      if (dnsServerStarted) {
+        dnsServer.stop();
+        dnsServerStarted = false;
+      }
       configureAccessPoint(false);
     }
 #if ENABLE_ARDUINO_OTA

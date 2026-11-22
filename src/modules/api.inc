@@ -108,9 +108,10 @@ bool requireWebAuth(AsyncWebServerRequest* req) {
   return true;
 }
 
-// Captive-portal routes: open ONLY until first-time setup is complete.
+// Captive-portal routes: open until first-time setup is complete, and briefly after
+// STA join while setupPortalHold is set so the wizard can show the success page.
 bool requirePortalAccess(AsyncWebServerRequest* req) {
-  if (!setupDone) {
+  if (!setupDone || setupPortalHold) {
     if (isUnsafeMethod(req) && (!originOk(req) || !csrfHeaderPresent(req, nullptr))) {
       req->send(403, "application/json", "{\"error\":\"blocked\"}");
       return false;

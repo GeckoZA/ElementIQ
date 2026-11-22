@@ -116,6 +116,7 @@ char webAuthUser[24] = WEB_AUTH_USER_DEFAULT;
 char webAuthSalt[17] = "";
 char webAuthHash[65] = "";
 bool setupDone = false;          // first-time setup wizard completed
+bool setupPortalHold = false;    // keep captive portal routes open after STA join (wizard success page)
 bool overTempFault = false;      // software hard trip (latched)
 bool otaRebootPending = false;   // image written, waiting to restart: heater stays off
 bool otaPendingVerify = false;   // freshly updated image not yet confirmed healthy
