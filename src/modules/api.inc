@@ -441,6 +441,8 @@ void setupAPI() {
     doc["github_owner"] = githubOwner; doc["github_repo"] = githubRepo;
     doc["ota_auto"] = otaAutoCheck; doc["ota_msg"] = lastOtaMsg; doc["ota_busy"] = otaBusy;
     doc["ota_progress"] = otaProgressPercent;
+    doc["update_available"] = updateAvailable;
+    doc["latest_firmware"] = latestFirmware[0] ? latestFirmware : FIRMWARE_VERSION;
     String json; serializeJson(doc, json);
     req->send(200, "application/json", json);
   });

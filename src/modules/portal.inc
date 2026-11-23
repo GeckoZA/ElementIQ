@@ -558,12 +558,13 @@ void processWifiManager() {
       arduinoOtaReady = true;
     }
 #endif
+    // ota_auto: periodic GitHub *check* (10 days), not silent install on every join
     bool autoUpdate;
     {
       StateGuard guard;
       autoUpdate = otaAutoCheck;
     }
-    if (autoUpdate) queueOtaOperation(true);
+    if (autoUpdate) queueOtaOperation(false);
   } else if (stationConnecting &&
              millis() - stationConnectStartedAt >= WIFI_CONNECT_TIMEOUT_MS) {
     stationConnecting = false;

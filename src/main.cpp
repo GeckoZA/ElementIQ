@@ -111,6 +111,7 @@ void loop() {
   if (arduinoOtaReady) ArduinoOTA.handle();
 #endif
   mqttLoop();
+  processOtaAutoCheck();
   retryAdsInitialization();
   {
     StateGuard guard;

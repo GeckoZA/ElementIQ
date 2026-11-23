@@ -55,9 +55,9 @@
 #define TEMP_VALID_MIN      5.0f
 #define TEMP_VALID_MAX      110.0f
 #define BOOST_SAFETY_MS     (90UL * 60UL * 1000UL)
-#define ELEMENT_SAFETY_MS   (10UL * 60UL * 1000UL)  /* no rise while heating */
-#define ELEMENT_RISE_LOW    3.0f   /* expected °C rise near 40°C in window */
-#define ELEMENT_RISE_HIGH   0.8f   /* expected °C rise near 70°C+ in window */
+#define ELEMENT_SAFETY_MS   (15UL * 60UL * 1000UL)  /* no meaningful rise while heating */
+#define ELEMENT_RISE_LOW    1.5f   /* expected °C rise near 40°C in window (was 3.0; many tanks rise slower) */
+#define ELEMENT_RISE_HIGH   0.4f   /* expected °C rise near 70°C+ in window (was 0.8) */
 #define SENSOR_FAULT_MS     (3UL * 60UL * 1000UL)
 
 // ============================================================
@@ -111,7 +111,7 @@
 #define MQTT_BASE_TOPIC     "elementiq"
 #define HA_DISCOVERY_PREFIX "homeassistant"
 #define HTTP_PORT           80
-#define FIRMWARE_VERSION    "v1.0.1.17"
+#define FIRMWARE_VERSION    "v1.0.1.18"
 // Must appear in every official .bin — web/GitHub OTA rejects images without it
 #define OTA_PRODUCT_MARKER  "ElementIQ-FW"
 // ESP image chip_id for ESP32-C3 (see esp_image_format.h)
@@ -120,6 +120,8 @@
 #define GITHUB_OWNER        "GeckoZA"
 #define GITHUB_REPO         "ElementIQ"
 #define GITHUB_ASSET_NAME   "firmware.bin"
+// Automatic GitHub release check interval when "Auto-check on boot" / ota_auto is enabled
+#define OTA_AUTO_CHECK_INTERVAL_S  (10UL * 24UL * 3600UL)  /* 10 days */
 
 // Device identity (change per unit)
 #define DEVICE_SERIAL       "2026/EQ/0001"

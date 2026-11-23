@@ -1,5 +1,38 @@
 #include "ota_marker.h"
 // ---- MQTT ----
+void publishUpdateState();   // defined below; called from publishState
+
+// OTA worker queue (worker body defined later, after checkGitHubUpdate)
+enum OtaCommand : uint8_t { OTA_CHECK = 1, OTA_INSTALL = 2 };
+QueueHandle_t otaQueue = nullptr;
+void otaWorker(void*);  // defined later
+
+bool initializeOtaWorker() {
+  otaQueue = xQueueCreate(1, sizeof(OtaCommand));
+  if (!otaQueue) return false;
+  return xTaskCreate(otaWorker, "elementiq_ota", 10240, nullptr, 1, nullptr) == pdPASS;
+}
+
+bool queueOtaOperation(bool install) {
+  StateGuard guard;
+  if (!otaQueue || otaBusy) return false;
+  OtaCommand command = install ? OTA_INSTALL : OTA_CHECK;
+  otaBusy = true;
+  otaProgressPercent = 0;
+  lastOtaMsg = install ? "Firmware updating..." : "Checking for updates...";
+  if (install) {
+    otaInProgress = true;
+    setHeater(false, true);
+  }
+  if (xQueueSend(otaQueue, &command, 0) != pdTRUE) {
+    otaBusy = false;
+    otaInProgress = false;
+    otaProgressPercent = -1;
+    return false;
+  }
+  return true;
+}
+
 void publishState() {
   StateGuard guard;
   if (!mqtt.connected()) return;
@@ -33,13 +66,35 @@ void publishState() {
   doc["heat_block_reason"] = heatBlockReason();
   doc["wifi_rssi"] = WiFi.status()==WL_CONNECTED ? WiFi.RSSI() : 0;
   doc["firmware"] = FIRMWARE_VERSION;
+  doc["update_available"] = updateAvailable;
+  if (latestFirmware[0]) doc["latest_firmware"] = latestFirmware;
+  else doc["latest_firmware"] = FIRMWARE_VERSION;
   doc["runtime_total_h"] = (float)(roundf(runtimeTotalSec / 3600.0f * 10) / 10);
   doc["runtime_today_h"] = (float)(roundf(runtimeTodaySec / 3600.0f * 100) / 100);
   doc["runtime_week_h"] = (float)(roundf(runtimeWeekSec / 3600.0f * 100) / 100);
   doc["runtime_month_h"] = (float)(roundf(runtimeMonthSec / 3600.0f * 100) / 100);
-  char buf[512];
+  char buf[640];
   serializeJson(doc, buf, sizeof(buf));
   mqtt.publish(topicState.c_str(), (const uint8_t*)buf, strlen(buf), true);
+  publishUpdateState();
+}
+
+// Home Assistant MQTT Update entity state (shows on Settings → Updates)
+void publishUpdateState() {
+  if (!mqtt.connected()) return;
+  JsonDocument doc;
+  doc["installed_version"] = FIRMWARE_VERSION;
+  doc["latest_version"] = latestFirmware[0] ? latestFirmware : FIRMWARE_VERSION;
+  doc["title"] = "ElementIQ Firmware";
+  if (latestReleaseUrl[0]) doc["release_url"] = latestReleaseUrl;
+  if (updateAvailable)
+    doc["release_summary"] = String("Update available: ") + latestFirmware;
+  else
+    doc["release_summary"] = "Up to date";
+  char buf[384];
+  size_t n = serializeJson(doc, buf, sizeof(buf));
+  if (n > 0 && n < sizeof(buf))
+    mqtt.publish((topicBase + "/update").c_str(), (const uint8_t*)buf, n, true);
 }
 
 void publishDiscovery() {
@@ -411,7 +466,40 @@ void publishDiscovery() {
   mqtt.publish((String(HA_DISCOVERY_PREFIX) + "/sensor/" + deviceId + "_runtime/config").c_str(),
                (const uint8_t*)"", 0, true);
 
+  // --- Firmware version (sensor) ---
+  {
+    String t = String(HA_DISCOVERY_PREFIX) + "/sensor/" + deviceId + "_fw/config";
+    JsonDocument doc;
+    doc["name"] = "Firmware Version";
+    doc["unique_id"] = deviceId + "_fw_v1";
+    doc["object_id"] = String("elementiq_") + deviceId + "_firmware";
+    doc["state_topic"] = topicState;
+    doc["value_template"] = "{{ value_json.firmware }}";
+    doc["icon"] = "mdi:chip";
+    doc["entity_category"] = "diagnostic";
+    fillDevice(doc);
+    pub(t, doc);
+  }
+
+  // --- Firmware update (HA Update entity → Settings → Updates) ---
+  // https://www.home-assistant.io/integrations/update.mqtt/
+  {
+    String t = String(HA_DISCOVERY_PREFIX) + "/update/" + deviceId + "_fw/config";
+    JsonDocument doc;
+    doc["name"] = "Firmware";
+    doc["unique_id"] = deviceId + "_update_v1";
+    doc["object_id"] = String("elementiq_") + deviceId + "_firmware";
+    doc["state_topic"] = topicBase + "/update";
+    doc["command_topic"] = topicCmd + "/update";
+    doc["payload_install"] = "install";
+    doc["device_class"] = "firmware";
+    doc["entity_category"] = "config";
+    fillDevice(doc);
+    pub(t, doc);
+  }
+
   mqtt.publish(topicAvail.c_str(), "online", true);
+  publishUpdateState();
   eqLogf("[MQTT] discovery published for device '%s'\n", friendlyName);
 }
 
@@ -498,6 +586,23 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (!strcmp(first, "ON") || !strcmp(first, "on") || !strcmp(first, "1"))
       setMode(MODE_AUTO);
     else setMode(MODE_OFF);
+  } else if (topicEndsWith(topic, "/update") || topicEndsWith(topic, "/ota/install")) {
+    // HA Update entity sends "install"; also accept explicit ota/install
+    if (!strcmp(first, "install") || !strcmp(first, "INSTALL") ||
+        !strcmp(first, "update") || !strcmp(first, "1")) {
+      if (!updateAvailable && latestFirmware[0] == '\0') {
+        // No cached release info yet — queue a check-then-install via install path
+        eqLog("[MQTT] firmware install requested");
+      }
+      if (!queueOtaOperation(true))
+        eqLog("[MQTT] OTA install queue failed (busy?)");
+    } else if (!strcmp(first, "check") || !strcmp(first, "CHECK")) {
+      if (!queueOtaOperation(false))
+        eqLog("[MQTT] OTA check queue failed (busy?)");
+    }
+  } else if (topicEndsWith(topic, "/ota/check")) {
+    if (!queueOtaOperation(false))
+      eqLog("[MQTT] OTA check queue failed (busy?)");
   }
   publishState();
 }
@@ -663,6 +768,53 @@ void mqttLoop() {
     }
     if (publishPending) publishState();
   }
+}
+
+// Periodic GitHub release check when ota_auto is enabled (default interval: 10 days).
+// Survives reboot via NVS timestamp. Check-only — never installs automatically.
+void processOtaAutoCheck() {
+  bool enabled;
+  {
+    StateGuard guard;
+    enabled = otaAutoCheck;
+  }
+  if (!enabled) return;
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (otaBusy || otaInProgress) return;
+
+  time_t now = time(nullptr);
+  if (now < 100000) return;  // need valid NTP time for interval
+
+  uint32_t last = 0;
+  {
+    StateGuard guard;
+    last = lastOtaCheckEpoch;
+  }
+  // Load from NVS once if RAM is still zero (after boot)
+  static bool nvsLoaded = false;
+  if (!nvsLoaded) {
+    nvsLoaded = true;
+    Preferences p;
+    if (p.begin("eiq", true)) {
+      last = p.getUInt("otaChk", 0);
+      p.end();
+      StateGuard guard;
+      lastOtaCheckEpoch = last;
+    }
+  }
+
+  if (last != 0 && (uint32_t)now >= last &&
+      ((uint32_t)now - last) < OTA_AUTO_CHECK_INTERVAL_S)
+    return;
+
+  // Avoid hammering GitHub on repeated failures: at most one attempt per hour
+  // until a check records a new lastOtaCheckEpoch.
+  static uint32_t lastAttemptMs = 0;
+  if (lastAttemptMs && (millis() - lastAttemptMs) < 3600000UL) return;
+  lastAttemptMs = millis();
+
+  eqLog("[OTA] scheduled GitHub check (10-day interval)");
+  queueOtaOperation(false);
 }
 
 #if ENABLE_ARDUINO_OTA
@@ -862,6 +1014,7 @@ static int compareFirmwareVersions(const char* a, const char* b) {
 }
 
 bool checkGitHubUpdate(bool install, const char* owner, const char* repo, String& result) {
+  otaCheckContactOk = false;
   if (!owner[0] || !repo[0]) { result = "GitHub owner/repo not set"; return false; }
   if (WiFi.status() != WL_CONNECTED) { result = "WiFi not connected"; return false; }
 
@@ -906,18 +1059,39 @@ bool checkGitHubUpdate(bool install, const char* owner, const char* repo, String
   const char* tag = doc["tag_name"];
   if (!tag) { result = "No tag"; return false; }
 
-  const char* remoteTag = tag;
   String remoteVer = tag;
   if (remoteVer.startsWith("v") || remoteVer.startsWith("V")) remoteVer = remoteVer.substring(1);
   String localVer = FIRMWARE_VERSION;
   if (localVer.startsWith("v") || localVer.startsWith("V")) localVer = localVer.substring(1);
 
+  // Always record the remote tag for the HA Update entity
+  otaCheckContactOk = true;
+  {
+    StateGuard guard;
+    strlcpy(latestFirmware, tag, sizeof(latestFirmware));
+    const char* htmlUrl = doc["html_url"];
+    if (htmlUrl && htmlUrl[0])
+      strlcpy(latestReleaseUrl, htmlUrl, sizeof(latestReleaseUrl));
+    else
+      snprintf(latestReleaseUrl, sizeof(latestReleaseUrl),
+               "https://github.com/%s/%s/releases/tag/%s", owner, repo, tag);
+  }
+
   int cmp = compareFirmwareVersions(remoteVer.c_str(), localVer.c_str());
   if (cmp < 0) {
+    {
+      StateGuard guard;
+      updateAvailable = false;
+    }
     result = String("No update (GitHub ") + tag + " is older than installed " + FIRMWARE_VERSION + ")";
     return false;
   }
   if (cmp == 0) {
+    {
+      StateGuard guard;
+      updateAvailable = false;
+      strlcpy(latestFirmware, FIRMWARE_VERSION, sizeof(latestFirmware));
+    }
     result = String("Up to date (") + FIRMWARE_VERSION + ")";
     return false;
   }
@@ -935,15 +1109,16 @@ bool checkGitHubUpdate(bool install, const char* owner, const char* repo, String
     return false;
   }
 
+  {
+    StateGuard guard;
+    updateAvailable = true;
+  }
   result = String("Update available: ") + tag + " (installed " + FIRMWARE_VERSION + ")";
   if (!install) return true;
 
   // Important: use a fresh TLS client for the asset download (do not reuse API client)
   return installFirmwareFromUrl(binUrl, result);
 }
-
-enum OtaCommand : uint8_t { OTA_CHECK = 1, OTA_INSTALL = 2 };
-QueueHandle_t otaQueue = nullptr;
 
 void otaWorker(void*) {
   for (;;) {
@@ -972,6 +1147,23 @@ void otaWorker(void*) {
       otaInProgress = false;
       if (!ok) otaProgressPercent = -1;
       else if (command == OTA_CHECK) otaProgressPercent = -1;
+      // Record successful contact with GitHub only when the API returned a release
+      if (otaCheckContactOk) {
+        time_t now = time(nullptr);
+        if (now > 100000) {
+          lastOtaCheckEpoch = (uint32_t)now;
+          Preferences p;
+          if (p.begin("eiq", false)) {
+            p.putUInt("otaChk", lastOtaCheckEpoch);
+            p.end();
+          }
+        }
+      }
+    }
+    // Refresh HA Update entity + state after every check/install attempt
+    {
+      StateGuard guard;
+      publishState();
     }
     // Reboot only after a successful install (check-only must not reboot)
     if (ok && command == OTA_INSTALL) {
@@ -980,31 +1172,5 @@ void otaWorker(void*) {
       safeRestart();
     }
   }
-}
-
-bool initializeOtaWorker() {
-  otaQueue = xQueueCreate(1, sizeof(OtaCommand));
-  if (!otaQueue) return false;
-  return xTaskCreate(otaWorker, "elementiq_ota", 10240, nullptr, 1, nullptr) == pdPASS;
-}
-
-bool queueOtaOperation(bool install) {
-  StateGuard guard;
-  if (!otaQueue || otaBusy) return false;
-  OtaCommand command = install ? OTA_INSTALL : OTA_CHECK;
-  otaBusy = true;
-  otaProgressPercent = 0;
-  lastOtaMsg = install ? "Firmware updating..." : "Checking for updates...";
-  if (install) {
-    otaInProgress = true;
-    setHeater(false, true);
-  }
-  if (xQueueSend(otaQueue, &command, 0) != pdTRUE) {
-    otaBusy = false;
-    otaInProgress = false;
-    otaProgressPercent = -1;
-    return false;
-  }
-  return true;
 }
 

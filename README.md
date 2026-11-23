@@ -1,4 +1,4 @@
-# ElementIQ v1.0.1.17 – Smart Geyser / Water Heater Control
+# ElementIQ v1.0.1.18 – Smart Geyser / Water Heater Control
 
 ESP32-C3-WROOM-02-N4 firmware: ADS1115 + NTC + relay, MQTT/HA, multi-page web UI.
 
@@ -38,6 +38,7 @@ ESP32-C3-WROOM-02-N4 firmware: ADS1115 + NTC + relay, MQTT/HA, multi-page web UI
   All of this is enforced in one place, `heaterInterlock()`, and shown as the "blocked" reason in the UI/MQTT.
 - **Task watchdog** (`WDT_TIMEOUT_S` = 20 s) resets the chip if `loop()` stalls.
 - **Fault indications:** sensor fault, element fault ("no temperature rise") and over-temperature each lock the heater off and are visible in the UI, MQTT and the status LED.
+- **Element fault (no rise while heating):** after the heater has been on for `ELEMENT_SAFETY_MS` (15 min), the temperature must have risen by at least the temperature-dependent threshold (`ELEMENT_RISE_LOW` 1.5 °C near 40 °C, tapering to `ELEMENT_RISE_HIGH` 0.4 °C near 70 °C). If not, the element is declared faulty, the heater is locked off and mode is forced to Off until the fault is acknowledged. The check uses a rolling window so long heat cycles remain monitored. These thresholds were relaxed in v1.0.1.18 because many tanks rise more slowly than the previous 3.0 / 0.8 °C in 10 min.
 
 ## Hardware (ESP32-C3-WROOM-02-N4)
 
@@ -72,7 +73,7 @@ The ESP32-C3 strapping pins are GPIO2, GPIO8 and GPIO9 (GPIO9 is only used for t
 ## OTA
 
 - **Web upload** (Update page): raw `firmware.bin`. The image must start with the ESP magic byte, be built for the ESP32-C3 and contain the `ElementIQ-FW` marker. The marker is searched for across the whole image and across network chunk boundaries (`include/ota_marker.h`). Host test: `g++ -std=c++17 -Iinclude tools/test_marker.cpp -o /tmp/tm && /tmp/tm`.
-- **GitHub release**: the tag must be newer than the installed version (e.g. `v1.0.1.17` > `v1.0.1.14`) and have a `firmware.bin` asset. Downloads are encrypted but the server certificate is **not** verified (unchanged from v1.0.1.14). Parked work to verify it is in `extras/tls_pinning/` (not built).
+- **GitHub release**: the tag must be newer than the installed version (e.g. `v1.0.1.18` > `v1.0.1.17`) and have a `firmware.bin` asset. Downloads are encrypted but the server certificate is **not** verified (unchanged from v1.0.1.14). Parked work to verify it is in `extras/tls_pinning/` (not built).
 - **Rollback:** after an update the new image has 60 s to prove itself. If it crashes or watchdog-resets twice (`OTA_MAX_CRASH_BOOTS`) before then, the previous slot is booted again. Serial shows `[BOOT] ...` lines.
 - `ENABLE_ARDUINO_OTA` is 0 (LAN OTA has no authentication). Set to 1 for development only.
 
@@ -167,6 +168,11 @@ Home Assistant discovery publishes a **climate** entity plus two **select** enti
 
 mDNS: **ElementIQ.local**
 
+## Changes in v1.0.1.18
+
+- **Fix (compile):** `queueOtaOperation` was not declared in scope inside `mqttCallback` / `processOtaAutoCheck`. The OTA worker queue, `initializeOtaWorker()` and `queueOtaOperation()` are now defined early in `mqtt_ota.inc` (worker body remains later, after the GitHub helpers). Added explicit FreeRTOS `queue.h` / `task.h` includes.
+- **Safety (element fault less sensitive):** window increased from 10 min to 15 min; expected rise reduced from 3.0 °C → 0.8 °C to **1.5 °C → 0.4 °C** (temperature-dependent). Reduces false “element fault” trips on tanks that heat more slowly than expected. Log message updated to match.
+
 ## Changes in v1.0.1.17 (since v1.0.1.14)
 
 - **Fix:** device time showed UTC. `configTime()` resets the timezone, so `TZ` is now set after it.
@@ -180,6 +186,8 @@ mDNS: **ElementIQ.local**
 - **Fix (OTA keep):** new firmware was rolled back to the previous version after a reboot because confirmation required a valid NTC reading. Confirmation now only needs a clean 60 s run (sensor faults no longer force rollback). Leave the unit powered for ≥60 s after an OTA reboot so the image is marked permanent.
 - **Fix (factory reset):** holding BOOT across the restart could loop forever with no AP. Reset now waits for the button to be released before rebooting. Stored Wi-Fi credentials are fully erased (`disconnect(true, true)`) so the captive portal at 192.168.4.1 comes up cleanly.
 - **Safety:** relay forced off while first-time setup is incomplete (`!setupDone`). Default mode is Off (was Auto), so a factory-reset or new unit cannot heat during the setup portal after the 20 s boot hold expires.
+- **MQTT / Home Assistant:** firmware version sensor; MQTT Update entity (appears on HA **Settings → Updates**); install via MQTT (`…/cmd/update` payload `install`) or the HA update card; state includes `installed_version` / `latest_version`.
+- **OTA auto-check:** when enabled on the Update page, GitHub is polled every **10 days** (timestamp in NVS). Check-only — never installs without user/HA action. (Previously a Wi‑Fi join could trigger an immediate install.)
 - GitHub OTA TLS behaviour is unchanged from v1.0.1.14.
 
 ## Earlier changes

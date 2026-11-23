@@ -1,5 +1,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 #include "control_logic.h"
 #include <esp_system.h>
 #if __has_include(<esp_random.h>)
@@ -151,6 +153,12 @@ char githubOwner[40] = GITHUB_OWNER;
 char githubRepo[40] = GITHUB_REPO;
 bool otaAutoCheck = false;
 String lastOtaMsg = "Idle";
+// Latest GitHub release seen by OTA check (for HA Update entity / MQTT)
+char latestFirmware[32] = "";
+char latestReleaseUrl[160] = "";
+bool updateAvailable = false;
+uint32_t lastOtaCheckEpoch = 0;   // UTC seconds of last successful GitHub check (NVS)
+bool otaCheckContactOk = false;   // set by checkGitHubUpdate when API responded
 
 // ---- Web console log (ring buffer, also mirrors to Serial) ----
 #ifndef EQ_LOG_LINES
@@ -457,7 +465,7 @@ void updateElementSafety() {
   float need = elementMinRiseForTemp(elementHeatStartTemp);
   if (rise < need) {
     elementFault = true;
-    eqLogf("[ELEMENT] FAULT – rise %.2f < need %.2f over 10 min (start %.1f). Element may be bad.\n",
+    eqLogf("[ELEMENT] FAULT – rise %.2f < need %.2f over 15 min (start %.1f). Element may be bad.\n",
                   rise, need, elementHeatStartTemp);
     setHeater(false, true);
     // Hold in OFF so it does not keep retrying
