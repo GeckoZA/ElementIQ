@@ -58,6 +58,8 @@
 #define ELEMENT_SAFETY_MS   (15UL * 60UL * 1000UL)  /* no meaningful rise while heating */
 #define ELEMENT_RISE_LOW    1.5f   /* expected °C rise near 40°C in window (was 3.0; many tanks rise slower) */
 #define ELEMENT_RISE_HIGH   0.4f   /* expected °C rise near 70°C+ in window (was 0.8) */
+/* Reset element-fault baseline if temp drops this much while heating (cold-water draw) */
+#define ELEMENT_DROP_RESET  1.0f
 #define SENSOR_FAULT_MS     (3UL * 60UL * 1000UL)
 
 // ============================================================
@@ -111,7 +113,7 @@
 #define MQTT_BASE_TOPIC     "elementiq"
 #define HA_DISCOVERY_PREFIX "homeassistant"
 #define HTTP_PORT           80
-#define FIRMWARE_VERSION    "v1.0.1.18"
+#define FIRMWARE_VERSION    "v1.0.1.19"
 // Must appear in every official .bin — web/GitHub OTA rejects images without it
 #define OTA_PRODUCT_MARKER  "ElementIQ-FW"
 // ESP image chip_id for ESP32-C3 (see esp_image_format.h)

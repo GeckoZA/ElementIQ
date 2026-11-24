@@ -455,11 +455,23 @@ void updateElementSafety() {
     return;
   }
   if (!tempValid(currentTemp)) return;
-  if (elementHeatStartedAt == 0) {
+  if (elementHeatStartedAt == 0 || !isfinite(elementHeatStartTemp)) {
     elementHeatStartedAt = millis();
     elementHeatStartTemp = currentTemp;
     return;
   }
+
+  // Cold-water draw (shower etc.): temperature drops while the element is on.
+  // Reset the baseline so the "no rise" check is not tripped by inlet water.
+  float drop = elementHeatStartTemp - currentTemp;
+  if (drop >= ELEMENT_DROP_RESET) {
+    eqLogf("[ELEMENT] draw detected – temp drop %.2f °C (%.1f → %.1f); resetting rise window\n",
+                  drop, elementHeatStartTemp, currentTemp);
+    elementHeatStartedAt = millis();
+    elementHeatStartTemp = currentTemp;
+    return;
+  }
+
   if (millis() - elementHeatStartedAt < ELEMENT_SAFETY_MS) return;
   float rise = currentTemp - elementHeatStartTemp;
   float need = elementMinRiseForTemp(elementHeatStartTemp);

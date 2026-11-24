@@ -1,4 +1,4 @@
-# ElementIQ v1.0.1.18 – Smart Geyser / Water Heater Control
+# ElementIQ v1.0.1.19 – Smart Geyser / Water Heater Control
 
 ESP32-C3 based firmware that turns a standard geyser into a smart, schedulable, Home Assistant-ready water heater with a polished local web UI, strong safety interlocks, and over-the-air updates.
 
@@ -43,7 +43,7 @@ ElementIQ is designed so the heater stays off whenever the firmware is not compl
   - before every controlled restart
   - while first-time setup is incomplete
 - **Sensor fault** – invalid readings force the relay off immediately; after 3 minutes the sensor-fault indicator is raised. Heating stays blocked until valid readings return. The ADS1115 is automatically retried.
-- **Element fault (no temperature rise)** – after the heater has been on for 15 minutes the temperature must have risen by at least a temperature-dependent amount (1.5 °C near 40 °C, tapering to 0.4 °C near 70 °C). If not, the element is declared faulty, the heater is locked off and mode is forced to Off until acknowledged. A rolling window keeps long heat cycles monitored. Thresholds were relaxed in v1.0.1.18 because many real tanks rise more slowly than the earlier 3.0 / 0.8 °C in 10 min values.
+- **Element fault (no temperature rise)** – after the heater has been on for 15 minutes the temperature must have risen by at least a temperature-dependent amount (1.5 °C near 40 °C, tapering to 0.4 °C near 70 °C). If not, the element is declared faulty, the heater is locked off and mode is forced to Off until acknowledged. A rolling window keeps long heat cycles monitored. **Cold-water draws** (e.g. shower) that drop the tank temperature by ≥ 1 °C while the element is on automatically reset the rise window, so inlet water no longer triggers a false element fault. Thresholds were relaxed in v1.0.1.18 because many real tanks rise more slowly than the earlier 3.0 / 0.8 °C in 10 min values.
 - **Task watchdog** (20 s) reboots the chip if the main loop stalls.
 - All faults are visible in the web UI, over MQTT and on the status LED.
 
@@ -138,6 +138,11 @@ Set `STATUS_LED_COMMON_ANODE` in `include/config.h` to 1 for a common-anode LED.
 ---
 
 ## Changelog
+
+### v1.0.1.19
+
+- **Safety (element fault vs cold-water draw):** while the heater is on, a temperature drop of ≥ 1 °C (typical of a shower or other hot-water use refilling the tank with cold water) now resets the 15-minute rise window. This prevents false “element fault” trips caused by inlet water rather than a failed element.
+- **UI (history graph):** temperature (°C) labels on the Y-axis, time labels on the X-axis, and a hover tooltip showing the exact temperature and timestamp of the nearest sample.
 
 ### v1.0.1.18
 
